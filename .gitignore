@@ -14,3 +14,4 @@ backend/.coverage
 *.log
 .cache/
 pytest-cache-files-*/
+.superpowers/
