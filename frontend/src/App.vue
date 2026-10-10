@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
 import { emptySelection, recallLabels, statusLabels } from './types'
 import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
@@ -54,6 +54,7 @@ const recipientWarnings = ref<string[]>([])
 const history = ref<HistoryItem[]>([])
 const historyTotal = ref(0)
 const historyPage = ref(1)
+const loadingHistory = ref(false)
 const detail = ref<BatchDetail | null>(null)
 type Balances = { month: string; totals: Record<string, number>; versions?: Record<string, number> }
 const recallConfirmation = ref<{ batchId: string; deliveryId?: string; count: number; names: string } | null>(null)
@@ -161,7 +162,29 @@ onMounted(async () => {
     }
   }, 3000)
 })
-onUnmounted(() => { clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer) })
+const recipientsPending = computed(() => (recipients.value.person_ids.length > 0 || recipients.value.extra_ids.length > 0 || recipients.value.levels.some(l => l.length)) && !resolvedRecipients.value.length)
+const submitHint = computed(() => {
+  if (busy.value) return '正在处理…'
+  if (!selectedPeople.value.length) return '请先选择记分对象'
+  if (!reason.value.trim()) return '请填写原因'
+  if (recipientWarnings.value.length) return '通知范围存在冲突,请先处理'
+  if (recipientsPending.value) return '正在解析通知范围…'
+  if (!resolvedRecipients.value.length) return '请选择通知范围'
+  return ''
+})
+const noticeBar = ref<HTMLElement | null>(null)
+const noticePaused = ref(false)
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+watch(notice, async (value) => {
+  clearTimeout(noticeTimer)
+  if (!value) return
+  await nextTick()
+  noticeBar.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  if (!noticePaused.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000)
+})
+function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
+function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
+onUnmounted(() => { clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
 let previewTimer: ReturnType<typeof setTimeout> | undefined
 const previewReady = computed(() => !busy.value && selectedPeople.value.length > 0 && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
 watch([targets, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings], () => {
@@ -212,9 +235,12 @@ function loadPreset() {
 async function savePreset() { await action(async () => { const saved = await api<Preset>(presetId.value ? `/presets/${presetId.value}` : '/presets', presetId.value ? 'PUT' : 'POST', { name: presetName.value, selection: recipients.value }); presets.value = await api<Preset[]>('/presets'); presetId.value = saved.id; notice.value = '个人发送配置已保存。' }) }
 async function deletePreset() { await action(async () => { await api(`/presets/${presetId.value}`, 'DELETE'); presets.value = presets.value.filter(p => p.id !== presetId.value); presetId.value = ''; presetName.value = ''; notice.value = '配置已删除。' }) }
 async function loadHistory() {
-  const result = await api<{ items: HistoryItem[]; total: number }>('/adjustments?page=' + historyPage.value)
-  const balances = await api<Balances>('/balances')
-  history.value = result.items; historyTotal.value = result.total; applyBalances(balances)
+  loadingHistory.value = true
+  try {
+    const result = await api<{ items: HistoryItem[]; total: number }>('/adjustments?page=' + historyPage.value)
+    const balances = await api<Balances>('/balances')
+    history.value = result.items; historyTotal.value = result.total; applyBalances(balances)
+  } finally { loadingHistory.value = false }
 }
 async function loadDetail(id: string, selectedPage = 1, polling = false) {
   const sequence = ++detailSequence
@@ -261,13 +287,13 @@ async function confirmRecall() {
       </div>
     </header>
     <div v-if="error" class="feedback error" role="alert">{{ error }}<button aria-label="关闭提示" @click="error = ''">×</button></div>
-    <div v-if="notice" class="feedback" role="status">{{ notice }}</div>
+    <div v-if="notice" ref="noticeBar" class="feedback success" role="status" @mouseenter="pauseNotice" @mouseleave="resumeNotice">{{ notice }}<button aria-label="关闭提示" @click="notice = ''">×</button></div>
     <div v-if="user?.demo_mode" class="demo-banner">本地演示 · 使用虚拟人员，通知仅模拟发送</div>
     <section v-if="!ready" class="panel login-panel"><h1>{{ redirectingToFeishu ? '正在前往飞书授权…' : '正在加载员工积分系统' }}</h1></section>
     <section v-else-if="!user" class="panel login-panel"><h1>{{ error ? '暂时无法进入系统' : '已退出登录' }}</h1><p v-if="!error">需要继续使用时，请授权飞书账号。</p><a class="primary-button" href="/api/auth/login">{{ error ? '重新授权飞书账号' : '使用飞书账号授权' }}</a><button v-if="demoAvailable" :disabled="busy" @click="action(async () => { await api('/auth/demo', 'POST'); await initialize() })">进入本地演示</button></section>
     <section v-else-if="!authorized" class="panel login-panel"><h1>当前账号暂无操作权限</h1><p>请联系管理员分配积分操作权限。{{ user.status === 'unknown' ? '人员目录尚待同步核实。' : '' }}</p><button :disabled="busy" @click="action(initialize)">重新检查权限</button></section>
     <template v-else>
-      <nav class="navigation" aria-label="功能导航"><button :class="{ active: page === 'console' }" :disabled="busy" @click="switchPage('console')">操作台</button><button :class="{ active: page === 'history' }" :disabled="busy" @click="switchPage('history')">发送记录</button><button v-if="user.role === 'admin'" :class="{ active: page === 'admin' }" :disabled="busy" @click="switchPage('admin')">权限管理</button><span>{{ month }} · 基础分 60</span></nav>
+      <nav class="navigation" aria-label="功能导航"><button :class="{ active: page === 'console' }" :disabled="busy" @click="switchPage('console')">操作台</button><button :class="{ active: page === 'history' }" :disabled="busy" @click="switchPage('history')">发送记录</button><button v-if="user.role === 'admin'" :class="{ active: page === 'admin' }" :disabled="busy" @click="switchPage('admin')">权限管理</button><span>{{ month }}</span></nav>
       <main v-if="page === 'console'" class="layout">
         <section class="panel" aria-label="积分操作">
           <fieldset class="op-form" :disabled="busy">
@@ -291,6 +317,7 @@ async function confirmRecall() {
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
             <button class="primary-button" :class="{ busy }" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
+            <p v-if="submitHint" class="hint submit-hint" aria-live="polite">{{ submitHint }}</p>
           </fieldset>
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
@@ -301,7 +328,8 @@ async function confirmRecall() {
       </main>
       <section v-else-if="page === 'history'" class="panel">
         <div class="panel-head flex-head"><h1 class="panel-title">发送记录</h1><button :disabled="busy" @click="action(loadHistory)">刷新</button></div>
-        <div v-if="!history.length" class="empty-state">还没有操作记录。</div>
+        <div v-if="loadingHistory" class="empty-state">加载中…</div>
+        <div v-else-if="!history.length" class="empty-state">还没有操作记录。</div>
         <div v-for="item in history" :key="item.id" class="history-entry">
           <button class="history-item" :disabled="busy" @click="action(() => loadDetail(item.id))">
             <div><b>{{ item.names.join('、') }}</b><span class="signed-number" :class="item.delta > 0 ? 'plus-text' : 'minus-text'">{{ item.delta > 0 ? '+' : '' }}{{ item.delta }} 分</span></div>

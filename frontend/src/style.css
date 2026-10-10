@@ -170,6 +170,8 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 /* ========== 提示反馈 ========== */
 .feedback{padding:11px 15px;border:1px solid var(--line);background:var(--surface-2);border-radius:var(--r-md);font-size:var(--fs-sm);margin-bottom:16px;display:flex;align-items:center;justify-content:space-between}
 .feedback.error{border-color:var(--minus);color:var(--minus-ink)}
+.feedback.success{border-color:var(--plus);color:var(--plus-ink)}
+.submit-hint{margin:8px 0 0}
 .feedback button{border:0;background:transparent;padding:0}
 .error-text{color:var(--minus-ink);font-size:var(--fs-xs);overflow-wrap:anywhere}
 .demo-banner{font-size:var(--fs-xs);color:var(--muted);padding-bottom:15px}
