@@ -341,6 +341,7 @@ fieldset:disabled{opacity:.7}
 .field-label{display:block;font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);margin-bottom:9px;letter-spacing:.02em}
 .field-label .prompt{margin-right:5px}
 .field-label small{margin-left:5px}
+.count{float:right;font-family:var(--sans);letter-spacing:0}
 .prompt{color:var(--accent)}
 .f-seg{display:flex;gap:8px}
 .opt{flex:1;padding:11px;font-size:var(--fs-md);font-weight:700;color:var(--muted)}
