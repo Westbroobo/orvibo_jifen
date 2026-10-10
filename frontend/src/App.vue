@@ -22,6 +22,7 @@ const operation = ref<'plus' | 'minus'>('plus')
 const points = ref(5)
 const reason = ref('')
 const manual = ref<Record<string, boolean>>({})
+const mirrorRecipients = ref(false)
 const overrides = ref<Record<string, number>>({})
 const preview = ref<Preview | null>(null)
 const previewIndex = ref(0)
@@ -50,10 +51,17 @@ let detailSequence = 0
 
 const authorized = computed(() => user.value?.status === 'active' && user.value.role !== 'none')
 const delta = computed(() => operation.value === 'plus' ? points.value : -points.value)
-const targetIds = computed(() => [...new Set([
-  ...directory.value.people.filter(p => targets.value.person_ids.includes(p.id) && (!targets.value.levels.some(l => l.length) || p.paths.some(path => targets.value.levels.every((ids, i) => !ids.length || ids.includes(path.ids[i] ?? ''))))).map(p => p.id),
-  ...targets.value.extra_ids,
-])])
+const targetIds = computed(() => {
+  const ids = new Set<string>()
+  for (const p of directory.value.people) {
+    if (p.status !== 'active') continue
+    const matchesPath = !targets.value.levels.some(l => l.length) || p.paths.some(path => targets.value.levels.every((idsAt, i) => !idsAt.length || idsAt.includes(path.ids[i] ?? '')))
+    if (targets.value.mode === 'all') { if (matchesPath) ids.add(p.id) }
+    else if (targets.value.person_ids.includes(p.id) && matchesPath) ids.add(p.id)
+  }
+  targets.value.extra_ids.forEach(id => ids.add(id))
+  return [...ids]
+})
 const selectedPeople = computed(() => directory.value.people.filter(p => targetIds.value.includes(p.id)))
 const displayAdminPeople = computed(() => directory.value.people.filter(p => p.name.includes(adminQuery.value.trim())))
 const validPreview = computed(() => preview.value && new Date(preview.value.expires_at).getTime() > clock.value)
@@ -154,6 +162,9 @@ watch([recipients, directory], () => {
     catch (e) { if (sequence === resolveSequence) recipientWarnings.value = [e instanceof Error ? e.message : '范围解析失败'] }
   }, 150)
 }, { deep: true })
+watch([targets, mirrorRecipients], () => {
+  if (mirrorRecipients.value) recipients.value = JSON.parse(JSON.stringify(targets.value))
+}, { deep: true })
 
 function toggleManual(person: Person, checked: boolean) {
   manual.value[person.id] = checked
@@ -245,14 +256,15 @@ async function confirmRecall() {
       <main v-if="page === 'console'" class="layout">
         <section class="panel" aria-label="积分操作">
           <fieldset class="op-form" :disabled="busy">
-            <PeoplePicker v-model="targets" :people="directory.people" :departments="directory.departments" title="记分对象" />
+            <PeoplePicker v-model="targets" :people="directory.people" :departments="directory.departments" title="记分对象" allow-all />
             <div><div class="field-label"><span class="prompt">&gt;</span> 操作类型</div><div class="f-seg"><button type="button" class="opt plus" :class="{ active: operation === 'plus' }" @click="operation = 'plus'">＋ 加分</button><button type="button" class="opt minus" :class="{ active: operation === 'minus' }" @click="operation = 'minus'">－ 扣分</button></div></div>
             <div><label class="field-label" for="points"><span class="prompt">&gt;</span> 每人分值</label><div class="f-points"><span :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ operation === 'plus' ? '+' : '−' }}</span><input id="points" v-model.number="points" type="number" min="1" step="1" :class="operation === 'plus' ? 'plus-text' : 'minus-text'"><span class="unit">分</span><div class="stepper"><button type="button" aria-label="减少分值" @click="points = Math.max(1, points - 1)">−</button><button type="button" aria-label="增加分值" @click="points++">＋</button></div></div></div>
             <div><label class="field-label" for="reason"><span class="prompt">&gt;</span> 原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea></div>
             <div v-if="selectedPeople.length"><div class="field-label"><span class="prompt">&gt;</span> 最终总分</div><div v-for="person in selectedPeople" :key="person.id" class="balance-row" role="group" :aria-label="`${person.name}总分`"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><span class="balance-line">{{ totals[person.id] ?? 60 }} → <b :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ manual[person.id] ? overrides[person.id] : (totals[person.id] ?? 60) + delta }}</b></span></div><label class="manual-toggle"><input type="checkbox" :checked="manual[person.id] ?? false" @change="toggleManual(person, ($event.target as HTMLInputElement).checked)">手动总分</label><input v-if="manual[person.id]" v-model.number="overrides[person.id]" class="override-input" type="number" step="1" :aria-label="`${person.name}最终总分`"></div><p v-if="selectedPeople.some(person => manual[person.id])" class="hint">手动总分已包含本次加减。</p></div>
             <div class="section-divider"></div>
             <div><div class="field-label"><span class="prompt">&gt;</span> 发送配置</div><select v-model="presetId" aria-label="选择个人发送配置" @change="loadPreset"><option value="">临时范围</option><option v-for="preset in presets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select><div class="preset-actions"><input v-model="presetName" aria-label="发送配置名称" placeholder="配置名称"><button type="button" :disabled="!presetName.trim()" @click="savePreset">{{ presetId ? '更新' : '保存' }}</button><button v-if="presetId" type="button" @click="deletePreset">删除</button></div></div>
-            <PeoplePicker v-model="recipients" :people="directory.people" :departments="directory.departments" title="通知范围" allow-all />
+            <label class="mirror-toggle"><input type="checkbox" v-model="mirrorRecipients">通知范围同记分对象</label>
+            <PeoplePicker v-if="!mirrorRecipients" v-model="recipients" :people="directory.people" :departments="directory.departments" title="通知范围" allow-all />
             <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
             <button class="primary-button" :class="{ busy }" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>

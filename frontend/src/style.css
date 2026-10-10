@@ -83,6 +83,7 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .preview-details{margin:20px 0;font-size:var(--fs-sm);color:var(--muted)}
 .preview-details details{margin:10px 0}
 .preview-details details p{font-size:var(--fs-xs);overflow-wrap:anywhere}
+.mirror-toggle{display:flex;align-items:center;gap:7px;font-size:var(--fs-sm)}
 
 /* ========== 发送记录 ========== */
 .empty-state{padding:55px 0;text-align:center;color:var(--muted);font-size:var(--fs-md)}
