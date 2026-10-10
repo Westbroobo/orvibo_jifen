@@ -79,6 +79,19 @@ function resultSummary(counts: Record<string, number> | undefined, labels: Recor
     .map(([status, count]) => `${labels[status] ?? status} ${count}`).join(' · ')
 }
 
+const historyStatusParts = (item: HistoryItem) => {
+  const parts: { text: string; error: boolean }[] = []
+  const add = (text: string, error = false) => parts.push({ text, error })
+  if (item.statuses.failed) add(`发送失败 ${item.statuses.failed}`, true)
+  if (item.statuses.review) add(`待核实 ${item.statuses.review}`, true)
+  if (item.recall_statuses?.recalled) add(`已撤回 ${item.recall_statuses.recalled}`)
+  if (item.cancelled_scores) add(`已作废 ${item.cancelled_scores} 笔记分`, true)
+  if (item.recall_statuses?.pending || item.recall_statuses?.recalling) add(`撤回处理中 ${(item.recall_statuses.pending ?? 0) + (item.recall_statuses.recalling ?? 0)}`)
+  if (item.recall_statuses?.failed) add(`撤回失败 ${item.recall_statuses.failed}`, true)
+  if (item.recall_statuses?.review) add(`撤回待核实 ${item.recall_statuses.review}`, true)
+  return parts
+}
+
 async function action(fn: () => Promise<void>) {
   if (busy.value) return
   busy.value = true; error.value = ''; notice.value = ''
@@ -250,27 +263,22 @@ async function confirmRecall() {
           <button class="history-item" :disabled="busy" @click="action(() => loadDetail(item.id))">
             <div><b>{{ item.names.join('、') }}</b><span class="signed-number" :class="item.delta > 0 ? 'plus-text' : 'minus-text'">{{ item.delta > 0 ? '+' : '' }}{{ item.delta }} 分</span></div>
             <p>{{ item.reason }}</p><small>{{ timeLabel(item.created_at) }} · {{ item.operator_name }} · {{ item.statuses.sent ?? 0 }} / {{ item.message_count }} 已发送</small>
-            <small v-if="item.statuses.failed" class="error-text"> · 发送失败 {{ item.statuses.failed }}</small>
-            <small v-if="item.statuses.review" class="error-text"> · 待核实 {{ item.statuses.review }}</small>
-            <small v-if="item.recall_statuses?.recalled"> · 已撤回 {{ item.recall_statuses.recalled }}</small>
-            <small v-if="item.cancelled_scores" class="cancelled-text"> · 已作废 {{ item.cancelled_scores }} 笔记分</small>
-            <small v-if="item.recall_statuses?.pending || item.recall_statuses?.recalling"> · 撤回处理中 {{ (item.recall_statuses.pending ?? 0) + (item.recall_statuses.recalling ?? 0) }}</small>
-            <small v-if="item.recall_statuses?.failed" class="error-text"> · 撤回失败 {{ item.recall_statuses.failed }}</small>
-            <small v-if="item.recall_statuses?.review" class="error-text"> · 撤回待核实 {{ item.recall_statuses.review }}</small>
+            <p v-if="historyStatusParts(item).length" class="status-line"><template v-for="(part, index) in historyStatusParts(item)" :key="index"><span v-if="index"> · </span><span :class="{ 'error-text': part.error }">{{ part.text }}</span></template></p>
           </button>
           <div class="history-actions"><button v-if="item.recall_available" class="recall-button" :disabled="busy" @click="askBatchRecall(item)">撤回卡片 · {{ item.recall_available }}</button><button :disabled="busy" @click="action(() => loadDetail(item.id))">查看结果</button></div>
         </div>
         <div v-if="historyTotal > 20" class="pagination"><button :disabled="busy || historyPage <= 1" @click="historyPage--; action(loadHistory)">上一页</button><span>{{ historyPage }} / {{ Math.max(1, Math.ceil(historyTotal / 20)) }}</span><button :disabled="busy || historyPage * 20 >= historyTotal" @click="historyPage++; action(loadHistory)">下一页</button></div>
       </section>
-      <section v-else-if="user.role === 'admin'" class="panel"><DirectorySync :busy="busy" @synced="action(refresh)" /><input v-model="adminQuery" type="search" aria-label="权限管理搜索" placeholder="搜索姓名"><div class="admin-table"><div v-for="person in displayAdminPeople" :key="person.id" class="admin-row"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></div><span>{{ statusLabels[person.status] }}</span><select :value="person.role" :aria-label="`${person.name}权限`" :disabled="busy || person.status !== 'active' && person.role === 'none'" @change="updateRole(person, $event)"><option value="none">未授权</option><option value="operator" :disabled="person.status !== 'active'">操作员</option><option value="admin" :disabled="person.status !== 'active'">管理员</option></select></div></div></section>
+      <section v-else-if="user.role === 'admin'" class="panel"><DirectorySync :busy="busy" @synced="action(refresh)" /><input v-model="adminQuery" type="search" aria-label="权限管理搜索" placeholder="搜索姓名"><div class="admin-head"><span>姓名</span><span>状态</span><span>权限</span></div><div class="admin-table"><div v-for="person in displayAdminPeople" :key="person.id" class="admin-row"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></div><span>{{ statusLabels[person.status] }}</span><select :value="person.role" :aria-label="`${person.name}权限`" :disabled="busy || person.status !== 'active' && person.role === 'none'" @change="updateRole(person, $event)"><option value="none">未授权</option><option value="operator" :disabled="person.status !== 'active'">操作员</option><option value="admin" :disabled="person.status !== 'active'">管理员</option></select></div></div></section>
     </template>
   </div>
   <Transition name="modal">
-  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p>{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button :disabled="busy" @click="confirmation = false">返回</button><button class="primary-button" :class="{ busy }" :disabled="busy || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
+  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p class="reason-box">{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button :disabled="busy" @click="confirmation = false">返回</button><button class="primary-button" :class="{ busy }" :disabled="busy || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
   <Transition name="modal">
   <div v-if="detail" class="modal-backdrop" @click.self="!busy && closeDetail()">
     <section class="panel modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
       <div class="flex-head"><h2 id="detail-title" class="panel-title">发送及撤回结果</h2><button aria-label="关闭发送结果" :disabled="busy" @click="closeDetail">×</button></div>
+      <div class="modal-section-title">逐人积分状态</div>
       <div class="score-results" aria-label="逐人积分状态">
         <div v-for="row in detailScoreRows" :key="row.person.id" class="score-result">
           <div class="score-person"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><b>{{ row.person.name }}</b><span class="score-state" :class="{ cancelled: row.score?.cancelled }">{{ row.score ? row.score.cancelled ? '记分已作废' : '积分有效' : '积分状态待更新' }}</span></div>
@@ -280,6 +288,7 @@ async function confirmRecall() {
       </div>
       <p v-if="resultSummary(detail.statuses, statusLabels)" class="hint">{{ resultSummary(detail.statuses, statusLabels) }}</p>
       <div v-if="resultSummary(detail.recall_statuses, recallLabels) || detail.recall_available" class="recall-toolbar"><p v-if="resultSummary(detail.recall_statuses, recallLabels)" class="hint">{{ resultSummary(detail.recall_statuses, recallLabels) }}</p><button v-if="detail.recall_available" class="recall-button" :disabled="busy" @click="askBatchRecall(detail)">撤回本批卡片 · {{ detail.recall_available }}</button></div>
+      <div class="modal-section-title">通知明细</div>
       <div class="deliveries"><div v-for="delivery in detail.deliveries" :key="delivery.id" class="delivery-row">
         <div><b>{{ detail.snapshot.rows.find(r => r.person.id === delivery.person_id)?.person.name }} → {{ delivery.recipient_name }}</b><small>{{ delivery.message_id || delivery.last_error || '等待后台发送' }}</small><p v-if="delivery.recall_error" class="error-text">{{ delivery.recall_error }}</p><small v-if="delivery.recalled_at">撤回确认时间：{{ timeLabel(delivery.recalled_at) }}</small><small v-else-if="recallStillAvailable(delivery)">可申请至 {{ timeLabel(delivery.recall_deadline) }}</small></div>
         <span>{{ delivery.recall_status ? recallLabels[delivery.recall_status] : statusLabels[delivery.status] }}</span>
