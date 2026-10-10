@@ -95,7 +95,7 @@ onUnmounted(() => { disposed = true; ++sequence; clearInterval(timer) })
   <div class="sync-status" aria-live="polite">
     <span>最近同步：{{ timeLabel(schedule?.last_sync_at, schedule ? '尚未同步' : '加载中…') }}</span>
     <span>下次同步：{{ timeLabel(schedule?.next_sync_at, schedule ? '未开启定时同步' : '加载中…') }}</span>
-    <span v-if="running || queued || recovering" class="sync-state">{{ running ? '同步中' : recovering ? '等待恢复同步' : '等待同步' }}</span>
+    <span v-if="running || queued || recovering" class="sync-state pulse">{{ running ? '同步中' : recovering ? '等待恢复同步' : '等待同步' }}</span>
   </div>
   <form v-if="editing" id="sync-settings" class="sync-settings" @submit.prevent="saveSettings">
     <fieldset :disabled="disabled">

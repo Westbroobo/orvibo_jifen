@@ -234,7 +234,7 @@ async function confirmRecall() {
             <PeoplePicker v-model="recipients" :people="directory.people" :departments="directory.departments" title="通知范围" allow-all />
             <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
-            <button class="primary-button" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
+            <button class="primary-button" :class="{ busy }" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
           </fieldset>
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
@@ -265,7 +265,7 @@ async function confirmRecall() {
       <section v-else-if="user.role === 'admin'" class="panel"><DirectorySync :busy="busy" @synced="action(refresh)" /><input v-model="adminQuery" type="search" aria-label="权限管理搜索" placeholder="搜索姓名"><div class="admin-table"><div v-for="person in displayAdminPeople" :key="person.id" class="admin-row"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></div><span>{{ statusLabels[person.status] }}</span><select :value="person.role" :aria-label="`${person.name}权限`" :disabled="busy || person.status !== 'active' && person.role === 'none'" @change="updateRole(person, $event)"><option value="none">未授权</option><option value="operator" :disabled="person.status !== 'active'">操作员</option><option value="admin" :disabled="person.status !== 'active'">管理员</option></select></div></div></section>
     </template>
   </div>
-  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p>{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button :disabled="busy" @click="confirmation = false">返回</button><button class="primary-button" :disabled="busy || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div>
+  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p>{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button :disabled="busy" @click="confirmation = false">返回</button><button class="primary-button" :class="{ busy }" :disabled="busy || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div>
   <div v-if="detail" class="modal-backdrop" @click.self="!busy && closeDetail()">
     <section class="panel modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
       <div class="flex-head"><h2 id="detail-title" class="panel-title">发送及撤回结果</h2><button aria-label="关闭发送结果" :disabled="busy" @click="closeDetail">×</button></div>
@@ -295,7 +295,7 @@ async function confirmRecall() {
       <p>撤回 {{ recallConfirmation.count }} 条卡片</p>
       <p class="hint">全部通知撤回成功后，对应记分作废；部分撤回仍有效。</p>
       <p v-if="error" class="error-text">{{ error }}</p>
-      <div class="modal-actions"><button :disabled="busy" @click="recallConfirmation = null">取消</button><button class="primary-button" :disabled="busy" @click="confirmRecall">{{ busy ? '正在提交…' : '确认撤回' }}</button></div>
+      <div class="modal-actions"><button :disabled="busy" @click="recallConfirmation = null">取消</button><button class="primary-button" :class="{ busy }" :disabled="busy" @click="confirmRecall">{{ busy ? '正在提交…' : '确认撤回' }}</button></div>
     </section>
   </div>
 </template>
