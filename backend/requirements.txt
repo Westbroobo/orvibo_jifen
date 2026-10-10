@@ -1,0 +1,8 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+SQLAlchemy>=2.0.38,<3
+pydantic-settings>=2.8,<3
+pymysql[rsa]>=1.1,<2
+httpx>=0.28,<1
+lark-oapi>=1.4,<2
+tzdata>=2025.1
