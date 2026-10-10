@@ -110,3 +110,22 @@ onUnmounted(() => { disposed = true; ++sequence; clearInterval(timer) })
   <p v-if="error" class="error-text" role="alert">{{ error }}</p>
   <p v-if="schedule?.last_sync_error" class="error-text">{{ schedule.last_sync_error }}<span v-if="schedule.retry_at"> · 下次重试：{{ timeLabel(schedule.retry_at, '') }}</span></p>
 </template>
+
+<style scoped>
+.sync-heading{gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.sync-heading .panel-title{margin:0}
+.sync-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.sync-actions button{white-space:nowrap;font-size:var(--fs-xs)}
+.sync-status{display:flex;gap:5px 24px;flex-wrap:wrap;margin-bottom:16px;color:var(--muted);font-size:var(--fs-xs)}
+.sync-state{color:var(--accent-deep)}
+.sync-settings{border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface-2);padding:14px 16px;margin-bottom:16px}
+.sync-toggle{display:flex;align-items:center;gap:7px;font-size:var(--fs-sm);margin-bottom:12px}
+.sync-fields{display:flex;align-items:flex-end;gap:12px 20px;flex-wrap:wrap}
+.sync-fields>label{font-size:var(--fs-xs);color:var(--muted)}
+.sync-fields input{margin-top:5px}
+.sync-interval{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);height:41px;margin-top:5px}
+.sync-interval input{width:75px;margin:0}
+.sync-fields>label>input{display:block;width:150px}
+.sync-fields .sync-actions{padding-bottom:3px}
+.sync-save{color:var(--accent-deep);border-color:var(--accent)}
+</style>
