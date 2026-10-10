@@ -282,3 +282,51 @@ SET @cancellation_create_sql = CONCAT(
 PREPARE cancellation_create_statement FROM @cancellation_create_sql;
 EXECUTE cancellation_create_statement;
 DEALLOCATE PREPARE cancellation_create_statement;
+
+-- =====================================================================
+-- 增量 2026-10-10（第三段）：管理员设置人员定时同步计划
+-- 已有数据库只执行本段；可重复执行，不修改已有同步配置或业务记录。
+-- 默认每天北京时间 02:00 同步；下次时间由 worker 初始化并持久化。
+-- 手动及飞书人员变更同步不改变定时计划，失败后等待 5 分钟重试。
+-- =====================================================================
+SET NAMES utf8mb4;
+SET @sync_schedule_columns = CONCAT_WS(', ',
+    IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_state' AND COLUMN_NAME = 'sync_enabled'), NULL,
+        'ADD COLUMN sync_enabled BOOL NOT NULL DEFAULT 1 COMMENT ''是否开启定时全量同步，不影响手动及人员事件同步'''),
+    IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_state' AND COLUMN_NAME = 'sync_interval_days'), NULL,
+        'ADD COLUMN sync_interval_days INTEGER NOT NULL DEFAULT 1 COMMENT ''定时同步间隔天数，范围 1 至 365 天'''),
+    IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_state' AND COLUMN_NAME = 'sync_time'), NULL,
+        'ADD COLUMN sync_time VARCHAR(5) NOT NULL DEFAULT ''02:00'' COMMENT ''北京时间的定时同步时刻，格式 HH:MM'''),
+    IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_state' AND COLUMN_NAME = 'next_sync_at'), NULL,
+        'ADD COLUMN next_sync_at DATETIME NULL COMMENT ''下次定时全量同步时间（UTC），关闭定时同步时为空'''),
+    IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_state' AND COLUMN_NAME = 'sync_retry_at'), NULL,
+        'ADD COLUMN sync_retry_at DATETIME NULL COMMENT ''同步失败后允许重试的时间（UTC），手动同步可提前重试''')
+);
+SET @sync_schedule_sql = IF(@sync_schedule_columns = '', 'SELECT 1', CONCAT('ALTER TABLE system_state ', @sync_schedule_columns));
+PREPARE sync_schedule_statement FROM @sync_schedule_sql;
+EXECUTE sync_schedule_statement;
+DEALLOCATE PREPARE sync_schedule_statement;
+
+-- =====================================================================
+-- 增量 2026-10-10（第四段）：同步任务心跳与异常恢复
+-- 已有数据库只执行本段；尚未执行第三段时先执行第三段。
+-- 可重复执行；旧任务没有有效租约，新 worker 会接管，避免长时间显示同步中。
+-- =====================================================================
+SET NAMES utf8mb4;
+SET @sync_lease_columns = CONCAT_WS(', ',
+    IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_state' AND COLUMN_NAME = 'sync_lease_token'), NULL,
+        'ADD COLUMN sync_lease_token VARCHAR(36) NULL COMMENT ''当前组织同步任务的归属令牌，防止过期任务覆盖新状态'''),
+    IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'system_state' AND COLUMN_NAME = 'sync_lease_until'), NULL,
+        'ADD COLUMN sync_lease_until DATETIME NULL COMMENT ''组织同步任务租约到期时间（UTC），运行期间续期，进程退出后自动失效''')
+);
+SET @sync_lease_sql = IF(@sync_lease_columns = '', 'SELECT 1', CONCAT('ALTER TABLE system_state ', @sync_lease_columns));
+PREPARE sync_lease_statement FROM @sync_lease_sql;
+EXECUTE sync_lease_statement;
+DEALLOCATE PREPARE sync_lease_statement;

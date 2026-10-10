@@ -4,6 +4,7 @@ from .config import get_settings
 from .db import lock_state, now_utc
 from .models import Department, Employee, EventReceipt, Membership, PermissionAudit
 from .schemas import Selection
+from .sync_schedule import release_sync_claim
 
 
 def employee_views(db):
@@ -67,13 +68,15 @@ def feishu_status(data):
     return "active"
 
 
-def apply_directory(db, departments, users, settings=None, expected_version=None):
+def apply_directory(db, departments, users, settings=None, expected_version=None, expected_sync_token=None):
     settings = settings or get_settings()
     state = lock_state(db)
+    if expected_sync_token is not None and state.sync_lease_token != expected_sync_token:
+        return False
     if expected_version is not None and state.directory_version != expected_version:
         # A real-time event landed while full sync was fetching. Do not overwrite it.
         state.sync_requested = True
-        state.sync_started_at = None
+        release_sync_claim(state)
         state.last_sync_error = "同步期间收到人员变更，等待重新同步"
         return False
     department_map = {d["open_department_id"]: d for d in departments}
@@ -141,7 +144,8 @@ def apply_directory(db, departments, users, settings=None, expected_version=None
     state.directory_version += 1
     state.last_sync_at = now_utc()
     state.last_sync_error = None
-    state.sync_started_at = None
+    release_sync_claim(state)
+    state.sync_retry_at = None
     return True
 
 

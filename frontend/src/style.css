@@ -3,6 +3,7 @@
 .brand{display:inline-flex;align-items:center;gap:12px;font-size:21px;min-width:0}.brand-logo{display:block;flex:none;width:36px;height:36px}
 .empty-preview-logo{opacity:.65}
 .department-grid{margin-bottom:10px}
+.sync-heading{gap:12px;flex-wrap:wrap;margin-bottom:14px}.sync-heading .panel-title{margin:0}.sync-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sync-actions button{white-space:nowrap;font-size:11px}.sync-status{display:flex;gap:5px 24px;flex-wrap:wrap;margin-bottom:16px;color:var(--faint);font-size:11px}.sync-state{color:var(--accent-deep)}.sync-settings{border:1px solid var(--line);border-radius:6px;background:var(--surface-2);padding:14px 16px;margin-bottom:16px}.sync-toggle{display:flex;align-items:center;gap:7px;font-size:12px;margin-bottom:12px}.sync-fields{display:flex;align-items:flex-end;gap:12px 20px;flex-wrap:wrap}.sync-fields>label{font-size:11px;color:var(--muted)}.sync-fields input{margin-top:5px}.sync-interval{display:flex;align-items:center;gap:8px;font-size:12px;height:41px;margin-top:5px}.sync-interval input{width:75px!important;margin:0}.sync-fields>label>input{display:block;width:150px}.sync-fields .sync-actions{padding-bottom:3px}.sync-save{color:var(--accent-deep);border-color:var(--accent)}
 .score-results{display:grid;gap:10px;margin:20px 0}
 .score-result{padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
 .score-person{display:flex;align-items:center;gap:8px;min-width:0;font-size:12px}

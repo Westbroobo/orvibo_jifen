@@ -8,7 +8,7 @@ from app import auth
 from app.db import get_db, now_utc
 from app.feishu import FeishuClient
 from app.main import app
-from app.models import Employee, LoginState, Preset, Session
+from app.models import Employee, LoginState, Preset, Session, SystemState
 
 
 @pytest.fixture
@@ -79,3 +79,51 @@ def test_oauth_login_does_not_grant_role(client, factory, monkeypatch):
     assert "token=" not in response.headers["location"]
     assert client.get("/api/auth/me").json()["role"] == "none"
     assert client.get("/api/directory").status_code == 403
+
+
+def test_sync_schedule_admin_only_and_csrf(client, factory):
+    endpoint = "/api/admin/directory/schedule"
+    body = {"enabled": True, "interval_days": 7, "time": "03:30"}
+    assert client.get(endpoint).status_code == 401
+    headers = login(client, factory, "operator")
+    assert client.get(endpoint).status_code == 403
+    assert client.put(endpoint, json=body, headers=headers).status_code == 403
+    headers = login(client, factory)
+    assert client.put(endpoint, json=body).status_code == 403
+    assert client.put(endpoint, json=body, headers=headers | {"Origin": "https://untrusted.example"}).status_code == 403
+    response = client.put(endpoint, json=body, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["interval_days"] == 7
+    assert response.json()["time"] == "03:30"
+    assert response.json()["next_sync_at"]
+    # Re-saving identical settings must not shift an existing plan.
+    assert client.put(endpoint, json=body, headers=headers).json()["next_sync_at"] == response.json()["next_sync_at"]
+    with factory.begin() as db:
+        db.get(Employee, "admin").role = "none"
+    assert client.get(endpoint).status_code == 403
+    assert client.put(endpoint, json=body, headers=headers).status_code == 403
+
+
+def test_disable_schedule_preserves_manual_sync_and_clears_retry(client, factory):
+    headers = login(client, factory)
+    with factory.begin() as db:
+        state = db.get(SystemState, 1)
+        state.sync_requested = False
+        state.last_sync_at = now_utc()
+        state.sync_retry_at = now_utc() + timedelta(minutes=5)
+    response = client.put("/api/admin/directory/schedule", json={"enabled": False, "interval_days": 1, "time": "02:00"}, headers=headers)
+    assert response.status_code == 200 and response.json()["next_sync_at"] is None
+    assert client.post("/api/admin/directory/sync", headers=headers).status_code == 200
+    state = client.get("/api/admin/directory/schedule").json()
+    assert state["sync_requested"] and state["retry_at"] is None
+    assert not state["enabled"] and state["next_sync_at"] is None
+
+
+@pytest.mark.parametrize("field,value", [("interval_days", 0), ("interval_days", 366), ("time", "25:00"), ("time", "00:60")])
+def test_sync_schedule_invalid_values_do_not_change_saved_settings(client, factory, field, value):
+    headers = login(client, factory)
+    endpoint = "/api/admin/directory/schedule"
+    previous = client.get(endpoint).json()
+    body = {"enabled": True, "interval_days": 1, "time": "02:00", field: value}
+    assert client.put(endpoint, json=body, headers=headers).status_code == 422
+    assert client.get(endpoint).json() == previous

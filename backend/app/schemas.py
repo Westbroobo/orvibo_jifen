@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 
 class Selection(BaseModel):
@@ -46,3 +46,10 @@ class PresetRequest(BaseModel):
 
 class RoleRequest(BaseModel):
     role: Literal["admin", "operator", "none"]
+
+
+class SyncScheduleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool
+    interval_days: StrictInt = Field(ge=1, le=365)
+    time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")

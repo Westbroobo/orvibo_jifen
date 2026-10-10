@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     feishu_redirect_uri: str = "http://localhost:5173/api/auth/callback"
     feishu_event_enabled: bool = True
     initial_admin_user_ids: str = ""
-    sync_interval_seconds: int = 3600
     send_interval_seconds: float = 0.25
     worker_poll_seconds: float = 2
     max_send_attempts: int = 6

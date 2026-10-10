@@ -9,12 +9,13 @@ from datetime import timedelta
 from sqlalchemy import delete
 
 from .config import get_settings
-from .db import SessionLocal, lock_state, now_utc
+from .db import SessionLocal, lock_state, new_id, now_utc
 from .delivery import claim_delivery, complete_delivery
 from .directory import apply_contact_event, apply_directory
 from .feishu import FeishuClient, FeishuError
 from .models import LoginState, Preview, Session
 from .recall import run_recall_once
+from .sync_schedule import SYNC_LEASE, advance_sync_at, first_sync_at, release_sync_claim, sync_is_running
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("jifen.worker")
@@ -60,30 +61,71 @@ def event_listener():
     client.start()
 
 
+def renew_sync_lease(token):
+    with SessionLocal.begin() as db:
+        state = lock_state(db)
+        when = now_utc()
+        if state.sync_lease_token != token or not sync_is_running(state, when):
+            return False
+        state.sync_lease_until = when + SYNC_LEASE
+    return True
+
+
+def sync_heartbeat(token, stopped):
+    while not stopped.wait(20):
+        try:
+            if not renew_sync_lease(token):
+                return
+        except Exception:
+            logger.warning("同步任务续期失败，将在下次心跳重试")
+
+
 def sync_if_due(client, settings):
     when = now_utc()
     with SessionLocal.begin() as db:
         state = lock_state(db)
-        due = state.sync_requested or not state.last_sync_at or when - state.last_sync_at >= timedelta(seconds=settings.sync_interval_seconds)
-        if not due or state.sync_started_at and when - state.sync_started_at < timedelta(minutes=30):
+        if state.sync_enabled and not state.next_sync_at:
+            state.next_sync_at = first_sync_at(when, state.sync_time, state.sync_interval_days)
+        elif not state.sync_enabled:
+            state.next_sync_at = None
+        scheduled_due = state.sync_enabled and state.next_sync_at <= when
+        running = sync_is_running(state, when)
+        stale_claim = state.sync_started_at and not running
+        due = state.sync_requested or not state.last_sync_at or scheduled_due or stale_claim
+        if not due or running:
             return
+        if state.sync_retry_at and when < state.sync_retry_at:
+            return
+        if scheduled_due:
+            state.next_sync_at = advance_sync_at(state.next_sync_at, when, state.sync_interval_days)
         state.sync_requested = False
         state.sync_started_at = when
+        state.sync_retry_at = None
+        token = state.sync_lease_token = new_id()
+        state.sync_lease_until = when + SYNC_LEASE
         version = state.directory_version
+    stopped = threading.Event()
+    heartbeat = threading.Thread(target=sync_heartbeat, args=(token, stopped), daemon=True)
+    heartbeat.start()
     try:
         departments, users = client.fetch_directory()
         with SessionLocal.begin() as db:
-            apply_directory(db, departments, users, settings, expected_version=version)
-        logger.info("组织架构同步完成")
+            applied = apply_directory(db, departments, users, settings, expected_version=version, expected_sync_token=token)
+        logger.info("组织架构同步完成" if applied else "同步结果已过期，交由当前任务处理")
     except Exception as error:
         detail = str(error) if isinstance(error, (FeishuError, ValueError)) else "同步异常，未应用不完整数据"
         logger.error("组织同步失败：%s", detail)
         with SessionLocal.begin() as db:
             state = lock_state(db)
+            if state.sync_lease_token != token:
+                return
             state.last_sync_error = detail
-            # Keep claim for one minute to avoid hammering a failing service.
-            state.sync_started_at = when - timedelta(minutes=29)
+            release_sync_claim(state)
+            state.sync_retry_at = now_utc() + timedelta(minutes=5)
             state.sync_requested = True
+    finally:
+        stopped.set()
+        heartbeat.join(timeout=5)
 
 
 def run_once(client, settings):

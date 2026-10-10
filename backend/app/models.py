@@ -15,6 +15,13 @@ class SystemState(Base):
     last_sync_error: Mapped[str | None] = mapped_column(Text, comment="最近一次组织同步错误，成功后清空")
     sync_requested: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否待执行全量组织同步")
     sync_started_at: Mapped[datetime | None] = mapped_column(DateTime, comment="当前同步任务开始时间（UTC），用于防止重复执行")
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", comment="是否开启定时全量同步，不影响手动及人员事件同步")
+    sync_interval_days: Mapped[int] = mapped_column(Integer, default=1, server_default="1", comment="定时同步间隔天数，范围 1 至 365 天")
+    sync_time: Mapped[str] = mapped_column(String(5), default="02:00", server_default="02:00", comment="北京时间的定时同步时刻，格式 HH:MM")
+    next_sync_at: Mapped[datetime | None] = mapped_column(DateTime, comment="下次定时全量同步时间（UTC），关闭定时同步时为空")
+    sync_retry_at: Mapped[datetime | None] = mapped_column(DateTime, comment="同步失败后允许重试的时间（UTC），手动同步可提前重试")
+    sync_lease_token: Mapped[str | None] = mapped_column(String(36), comment="当前组织同步任务的归属令牌，防止过期任务覆盖新状态")
+    sync_lease_until: Mapped[datetime | None] = mapped_column(DateTime, comment="组织同步任务租约到期时间（UTC），运行期间续期，进程退出后自动失效")
     bootstrap_done: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已完成初始管理员权限初始化")
     events_connected_at: Mapped[datetime | None] = mapped_column(DateTime, comment="飞书事件长连接最近重连成功时间（UTC），断开时清空")
 

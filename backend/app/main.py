@@ -13,7 +13,8 @@ from .delivery import retry_delivery
 from .directory import employee_views, in_selection_path, resolve_selection
 from .models import Balance, Batch, Delivery, Employee, Ledger, MessageRecall, PermissionAudit, Preset, SystemState
 from .recall import can_recall, recall_deadline, recall_summary, request_recall
-from .schemas import AdjustmentRequest, CommitRequest, PresetRequest, RoleRequest, Selection
+from .schemas import AdjustmentRequest, CommitRequest, PresetRequest, RoleRequest, Selection, SyncScheduleRequest
+from .sync_schedule import first_sync_at, schedule_view
 
 settings = get_settings()
 
@@ -245,5 +246,26 @@ def request_sync(user=Depends(auth.admin), db=Depends(get_db)):
     if require_operator(db, user.id).role != "admin":
         raise HTTPException(403, "仅管理员可操作")
     state.sync_requested = True
+    state.sync_retry_at = None
     db.commit()
     return {"ok": True}
+
+
+@app.get("/api/admin/directory/schedule")
+def get_sync_schedule(user=Depends(auth.admin), db=Depends(get_db)):
+    return schedule_view(db.get(SystemState, 1))
+
+
+@app.put("/api/admin/directory/schedule")
+def update_sync_schedule(body: SyncScheduleRequest, user=Depends(auth.admin), db=Depends(get_db)):
+    state = lock_state(db)
+    if require_operator(db, user.id).role != "admin":
+        raise HTTPException(403, "仅管理员可操作")
+    changed = (state.sync_enabled, state.sync_interval_days, state.sync_time) != (body.enabled, body.interval_days, body.time)
+    state.sync_enabled = body.enabled
+    state.sync_interval_days = body.interval_days
+    state.sync_time = body.time
+    if changed or body.enabled and not state.next_sync_at:
+        state.next_sync_at = first_sync_at(now_utc(), body.time, body.interval_days) if body.enabled else None
+    db.commit()
+    return schedule_view(state)

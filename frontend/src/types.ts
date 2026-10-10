@@ -4,6 +4,7 @@ export interface Department { id: string; name: string; parent_id: string; path_
 export interface Selection { levels: string[][]; mode: 'all' | 'selected'; person_ids: string[]; extra_ids: string[] }
 export interface User { id: string; name: string; avatar_url: string; role: Role; status: string; csrf_token: string; demo_mode: boolean }
 export interface Directory { people: Person[]; departments: Department[]; last_sync_at: string | null; last_sync_error: string | null; sync_requested: boolean }
+export interface SyncSchedule { enabled: boolean; interval_days: number; time: string; next_sync_at: string | null; last_sync_at: string | null; last_sync_error: string | null; sync_requested: boolean; sync_started_at: string | null; retry_at: string | null; directory_version: number; status: 'idle' | 'queued' | 'running' | 'recovering' | 'retry' }
 export interface CardContext { person_name: string; person_open_id: string; department: string; delta: number; total: number; reason: string; operator_name: string; month: string; time: string; operation: string }
 export interface CardVariables { department: string; user_name: string; reason: string; score: string; total_score: string }
 export interface PreviewRow { person: Person; before_total: number; final_total: number; override_total: number | null; balance_version: number; context: CardContext; card: { data: { template_id: string; template_version_name: string; template_variable: CardVariables } } }
