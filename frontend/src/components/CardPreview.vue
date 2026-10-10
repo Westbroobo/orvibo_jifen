@@ -33,14 +33,17 @@ const values = computed<CardVariables>(() => props.variables ?? {
 </template>
 
 <style scoped>
-.card-preview-person{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:13px}
-.points-card{--card-color:#22872d;--department-color:#35a454;background:var(--card-color);color:#fff;border-radius:6px;padding:16px 20px 26px;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;box-shadow:0 2px 8px #0000000a;overflow-wrap:anywhere}
-.points-card-minus{--card-color:#ff9b20;--department-color:#e77600}
-.points-card-top{display:grid;grid-template-columns:2fr 1fr;align-items:center;gap:8px;margin-bottom:14px;text-align:center;font-size:13px}
-.points-card-top>strong{font-size:15px}.points-card-top>span{font-size:11px;font-weight:700;line-height:1.45}
-.points-card-department{background:#fff;color:var(--department-color);padding:8px 12px;border-radius:4px;font-size:16px;font-weight:700;text-align:center;white-space:pre-wrap}
+.card-preview-person{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:var(--fs-md)}
+.points-card{background:var(--card-plus);color:#fff;border-radius:var(--r-md);padding:16px 20px 26px;font-family:var(--sans);line-height:1.55;box-shadow:var(--shadow-soft);overflow-wrap:anywhere}
+.points-card-minus{background:var(--card-minus)}
+.points-card-top{display:grid;grid-template-columns:2fr 1fr;align-items:center;gap:8px;margin-bottom:14px;text-align:center;font-size:var(--fs-md)}
+.points-card-top>strong{font-size:15px}.points-card-top>span{font-size:var(--fs-xs);font-weight:700;line-height:1.45}
+.points-card-department{background:#fff;color:var(--card-plus-dep);padding:8px 12px;border-radius:var(--r-sm);font-size:16px;font-weight:700;text-align:center;white-space:pre-wrap}
+.points-card-minus .points-card-department{color:var(--card-minus-dep)}
 .points-card-person,.points-card-reason{color:#fff;font-size:14px;font-weight:700;text-align:center;margin:28px 8px 0;white-space:pre-wrap}
-.points-card-scores{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:32px;text-align:center}.points-card-scores span{display:block;font-size:11px;font-weight:700}.points-card-scores strong{display:block;font-size:17px;margin-top:5px}
-.card-preview-meta{font-size:10px;color:var(--faint);margin:14px 0 0;line-height:1.8}
-@media(max-width:420px){.points-card{padding:14px 14px 22px}.points-card-top>strong{font-size:14px}.points-card-department{font-size:14px}.points-card-person,.points-card-reason{font-size:13px}}
+.points-card-scores{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:32px;text-align:center}
+.points-card-scores span{display:block;font-size:var(--fs-xs);font-weight:700}
+.points-card-scores strong{display:block;font-size:17px;margin-top:5px;font-family:var(--mono);font-weight:700;font-variant-numeric:tabular-nums}
+.card-preview-meta{font-size:var(--fs-xs);color:var(--muted);margin:14px 0 0;line-height:1.8}
+@media(max-width:420px){.points-card{padding:14px 14px 22px}.points-card-top>strong{font-size:14px}.points-card-department{font-size:14px}.points-card-person,.points-card-reason{font-size:var(--fs-md)}}
 </style>
