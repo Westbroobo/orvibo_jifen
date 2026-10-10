@@ -123,6 +123,10 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .delivery-row>button{white-space:nowrap}
 .delivery-row .error-text{margin:5px 0 0}
 .recall-confirmation{z-index:20}
+.modal-enter-active,.modal-leave-active{transition:opacity .15s}
+.modal-enter-active .modal,.modal-leave-active .modal{transition:opacity .15s,transform .15s}
+.modal-enter-from,.modal-leave-to{opacity:0}
+.modal-enter-from .modal,.modal-leave-to .modal{opacity:0;transform:translateY(8px)}
 .score-results{display:grid;gap:10px;margin:20px 0}
 .score-result{padding:14px 16px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface-2)}
 .score-person{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--fs-sm)}
