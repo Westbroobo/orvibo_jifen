@@ -1013,7 +1013,7 @@ git commit -m "feat: 通知范围可镜像记分对象,记分对象支持全员�
     <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
   </div>
   <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
-  <button class="primary-button" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
+  <button class="primary-button" :class="{ busy }" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
 </fieldset>
 ```
 
@@ -1387,10 +1387,10 @@ watch(detail, async (value) => { if (value) { await nextTick(); detailClose.valu
 
 对应 `</fieldset>`(「更新预览」按钮之后)改为 `</fieldset></form>`
 
-「更新预览」按钮 `<button class="primary-button" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">` 改为:
+「更新预览」按钮 `<button class="primary-button" :class="{ busy }" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">` 改为:
 
 ```html
-<button class="primary-button" type="submit" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length">
+<button class="primary-button" :class="{ busy }" type="submit" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length">
 ```
 
 (去掉 `@click` —— 表单 submit 触发;makePreview 已有守卫,Enter 空表单不会误发)
