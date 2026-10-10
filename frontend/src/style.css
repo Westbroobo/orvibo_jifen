@@ -98,7 +98,6 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .recall-button{color:var(--accent-deep);border-color:var(--accent)}
 .recall-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
 .recall-toolbar p{margin:0}
-.cancelled-text{color:var(--minus-ink)}
 .history-item small,.delivery-row small,.pagination small{font-family:var(--mono)}
 .status-line{display:block;margin:4px 0 0;font-size:var(--fs-xs);color:var(--muted)}
 
@@ -144,7 +143,6 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .score-result>small{display:block;margin-top:6px}
 .reason-box{padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface-2);max-height:160px;overflow:auto;font-size:var(--fs-md)}
 .modal-section-title{font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);margin:18px 0 8px}
-.delivery-row>small{max-width:none;text-align:left}
 
 /* ========== 顶栏账号 ========== */
 .account-panel{display:flex;align-items:center;max-width:100%;padding:8px 8px 8px 10px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--shadow-soft)}
@@ -212,6 +210,8 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
   .navigation>span{width:100%;margin:9px 0 0}
   .admin-row{gap:8px}
   .admin-row select{width:92px}
+  .admin-head{gap:8px}
+  .admin-head>span:last-child{width:92px}
   .modal-actions{flex-direction:column}
   .f-points input{width:105px}
   .preset-actions{flex-wrap:wrap}
