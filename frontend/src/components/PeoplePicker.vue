@@ -118,7 +118,7 @@ details input{margin-top:8px}
   .department-grid{gap:5px}
   .department-grid select{font-size:var(--fs-xs)}
   .picker-tools .pagination{gap:3px}
-  .picker-tools .pagination button{padding:3px}
+  .picker-tools .pagination button{padding:5px 10px}
 }
 .department-fold{margin-bottom:10px}
 .department-fold summary{font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);margin-bottom:8px}

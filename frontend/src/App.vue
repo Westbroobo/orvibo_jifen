@@ -329,15 +329,19 @@ async function confirmRecall() {
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
-            <button class="primary-button" :class="{ busy }" type="submit" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length">{{ busy ? '正在处理…' : '更新预览' }}</button>
+            <button class="primary-button form-submit" :class="{ busy }" type="submit" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length">{{ busy ? '正在处理…' : '更新预览' }}</button>
             <p v-if="submitHint" class="hint submit-hint" aria-live="polite">{{ submitHint }}</p>
           </fieldset></form>
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
           <select v-if="(preview?.rows.length ?? selectedPeople.length) > 1" v-model.number="previewIndex" aria-label="切换卡片预览人员"><option v-for="(person, index) in (preview ? preview.rows.map(r => r.person) : selectedPeople)" :key="person.id" :value="index">{{ person.name }}</option></select>
           <CardPreview v-if="activeRow" :context="activeRow.context" :variables="activeRow.card.data.template_variable" :avatar-url="activeRow.person.avatar_url" /><CardPreview v-else-if="draftContext" :context="draftContext" :avatar-url="draftPerson?.avatar_url" /><div v-else class="empty-preview"><img class="empty-preview-logo" src="/logo.svg" alt="" width="36" height="36"><p>请选择记分对象</p></div>
-          <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button class="primary-button" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button></template>
+          <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button class="primary-button preview-send" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button></template>
         </aside>
+        <div class="mobile-actions">
+          <button v-if="!preview" type="button" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
+          <button v-else class="primary-button" type="button" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button>
+        </div>
       </main>
       <section v-else-if="page === 'history'" class="panel">
         <div class="panel-head flex-head"><h1 class="panel-title">发送记录</h1><button :disabled="busy" @click="action(loadHistory)">刷新</button></div>
