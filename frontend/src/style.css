@@ -15,6 +15,7 @@ input:not([type=checkbox],[type=radio]),textarea,select{width:100%;min-width:0;b
 input[type=checkbox],input[type=radio]{accent-color:var(--accent);flex:none;width:15px;height:15px;margin:0}
 textarea{resize:vertical;line-height:1.6}
 select{cursor:pointer}
+summary{cursor:pointer}
 small{font-size:var(--fs-xs)}
 h1,h2{font-family:var(--serif)}
 p{margin:8px 0 12px}
@@ -35,7 +36,6 @@ fieldset:disabled{opacity:.7}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:24px;min-width:0}
 .panel-head{margin-bottom:22px}
 .panel-title{font-size:var(--fs-title);margin:0 0 4px;font-weight:700}
-.panel-sub{font-size:var(--fs-sm);color:var(--muted);margin:0}
 .flex-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .flex-head>button{white-space:nowrap}
 .empty-preview-logo{opacity:.65}
@@ -149,10 +149,9 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .login-panel h1{font-size:27px;line-height:1.5;margin:16px 0}
 .login-panel p{color:var(--muted);font-size:var(--fs-md);margin:15px 0 26px}
 .login-panel>button{width:100%;margin-top:12px}
-.eyebrow{font-size:var(--fs-xs);font-family:var(--mono);color:var(--accent-deep);letter-spacing:.15em}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 5px}
 .chip{display:flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--line);padding:2px 8px;border-radius:var(--r-md);font-size:var(--fs-xs)}
-.chip button{border:0;padding:0;background:transparent;font-size:13px}
+.chip button{border:0;padding:0;background:transparent;font-size:var(--fs-md)}
 .pagination{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap}
 .pagination button{padding:4px 7px;font-size:var(--fs-xs)}
 b,button,input{font-variant-numeric:tabular-nums}
