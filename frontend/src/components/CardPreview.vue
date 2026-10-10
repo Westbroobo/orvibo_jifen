@@ -29,7 +29,7 @@ const values = computed<CardVariables>(() => props.variables ?? {
       <div><span>当前总分</span><strong>{{ values.total_score }} 分</strong></div>
     </div>
   </article>
-  <p class="card-preview-meta">{{ context.month }} · 操作人：{{ context.operator_name }}<br>{{ context.time }}</p>
+  <p class="card-preview-meta">操作人：{{ context.operator_name }}<span v-if="context.time"> · {{ context.time }}</span></p>
 </template>
 
 <style scoped>

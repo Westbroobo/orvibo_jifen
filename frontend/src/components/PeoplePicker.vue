@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Department, Person, Selection } from '../types'
 import EmployeeAvatar from './EmployeeAvatar.vue'
 
@@ -12,6 +12,7 @@ const usable = computed(() => props.people.filter(p => p.status === 'active'))
 const matchesPath = (p: Person) => !props.modelValue.levels.some(l => l.length) || p.paths.some(path => props.modelValue.levels.every((ids, i) => !ids.length || ids.includes(path.ids[i] ?? '')))
 const filtered = computed(() => usable.value.filter(p => matchesPath(p) && p.name.includes(query.value.trim())))
 const visible = computed(() => filtered.value.slice((page.value - 1) * 30, page.value * 30))
+watch(filtered, () => { page.value = Math.min(page.value, Math.max(1, Math.ceil(filtered.value.length / 30))) })
 const extras = computed(() => usable.value.filter(p => extraQuery.value.trim() && p.name.includes(extraQuery.value.trim())).slice(0, 20))
 const chosen = computed(() => {
   const ids = new Set(props.modelValue.extra_ids)
@@ -57,12 +58,12 @@ function selectVisible() { update({ person_ids: [...new Set([...props.modelValue
         </select>
       </label>
     </div>
-    <div class="picker-tools"><small>可多选部门；留空表示该层不限。</small><button class="text-button" type="button" @click="update({ levels: [[], [], []] }); page = 1">清除部门</button></div>
+    <div v-if="modelValue.levels.some(level => level.length)" class="picker-tools"><button class="text-button" type="button" @click="update({ levels: [[], [], []] }); page = 1">清除部门</button></div>
     <div v-if="allowAll" class="inline-options">
       <label><input type="radio" :name="title" :checked="modelValue.mode === 'selected'" @change="update({ mode: 'selected' })">逐人勾选</label>
       <label><input type="radio" :name="title" :checked="modelValue.mode === 'all'" @change="update({ mode: 'all' })">范围内全部人员</label>
     </div>
-    <p v-if="modelValue.mode === 'all' && !modelValue.levels.some(l => l.length)" class="hint">请先选择部门。未选部门时不会自动通知全公司。</p>
+    <p v-if="modelValue.mode === 'all' && !modelValue.levels.some(l => l.length)" class="hint">请选择部门</p>
     <template v-if="modelValue.mode === 'selected'">
       <input v-model="query" type="search" :aria-label="`${title}姓名搜索`" placeholder="搜索姓名" @input="page = 1">
       <div class="people-list">
@@ -71,9 +72,9 @@ function selectVisible() { update({ person_ids: [...new Set([...props.modelValue
           <EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" />
           <span class="person-text"><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></span>
         </label>
-        <p v-if="!visible.length" class="hint">没有符合筛选的在职人员。</p>
+        <p v-if="!visible.length" class="hint">暂无匹配人员</p>
       </div>
-      <div class="picker-tools"><button class="text-button" type="button" @click="selectVisible">勾选本页</button><span class="pagination"><button type="button" :disabled="page <= 1" @click="page--">上一页</button><small>{{ page }} / {{ Math.max(1, Math.ceil(filtered.length / 30)) }}</small><button type="button" :disabled="page * 30 >= filtered.length" @click="page++">下一页</button></span></div>
+      <div v-if="visible.length" class="picker-tools"><button class="text-button" type="button" @click="selectVisible">全选本页</button><span v-if="filtered.length > 30" class="pagination"><button type="button" :disabled="page <= 1" @click="page--">上一页</button><small>{{ page }} / {{ Math.max(1, Math.ceil(filtered.length / 30)) }}</small><button type="button" :disabled="page * 30 >= filtered.length" @click="page++">下一页</button></span></div>
     </template>
     <details class="extra-picker">
       <summary>额外添加人员</summary>
