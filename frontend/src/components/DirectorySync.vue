@@ -88,8 +88,8 @@ onUnmounted(() => { disposed = true; ++sequence; clearInterval(timer) })
   <div class="panel-head flex-head sync-heading">
     <h1 class="panel-title">权限管理</h1>
     <div class="sync-actions">
-      <button :disabled="disabled" :aria-expanded="editing" aria-controls="sync-settings" @click="openSettings">同步设置</button>
-      <button :disabled="disabled || running || queued" @click="syncNow">{{ running ? '同步中…' : queued ? '等待同步…' : '同步人员' }}</button>
+      <button type="button" :disabled="disabled" :aria-expanded="editing" aria-controls="sync-settings" @click="openSettings">同步设置</button>
+      <button type="button" :disabled="disabled || running || queued" @click="syncNow">{{ running ? '同步中…' : queued ? '等待同步…' : '同步人员' }}</button>
     </div>
   </div>
   <div class="sync-status" aria-live="polite">
@@ -112,20 +112,21 @@ onUnmounted(() => { disposed = true; ++sequence; clearInterval(timer) })
 </template>
 
 <style scoped>
-.sync-heading{gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.sync-heading{gap:12px;flex-wrap:wrap;margin-bottom:16px}
 .sync-heading .panel-title{margin:0}
 .sync-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .sync-actions button{white-space:nowrap;font-size:var(--fs-xs)}
-.sync-status{display:flex;gap:5px 24px;flex-wrap:wrap;margin-bottom:16px;color:var(--muted);font-size:var(--fs-xs)}
+.sync-status{display:flex;gap:4px 24px;flex-wrap:wrap;margin-bottom:16px;color:var(--muted);font-size:var(--fs-xs)}
+.sync-status span:not(.sync-state){font-family:var(--mono)}
 .sync-state{color:var(--accent-deep)}
-.sync-settings{border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface-2);padding:14px 16px;margin-bottom:16px}
-.sync-toggle{display:flex;align-items:center;gap:7px;font-size:var(--fs-sm);margin-bottom:12px}
-.sync-fields{display:flex;align-items:flex-end;gap:12px 20px;flex-wrap:wrap}
+.sync-settings{border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface-2);padding:16px;margin-bottom:16px}
+.sync-toggle{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);margin-bottom:12px}
+.sync-fields{display:flex;align-items:flex-end;gap:12px 16px;flex-wrap:wrap}
 .sync-fields>label{font-size:var(--fs-xs);color:var(--muted)}
-.sync-fields input{margin-top:5px}
-.sync-interval{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);height:41px;margin-top:5px}
+.sync-fields input{margin-top:4px}
+.sync-interval{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);height:calc(var(--fs-md) * 1.65 + var(--sp-2) * 2 + 2px);margin-top:4px}
 .sync-interval input{width:75px;margin:0}
 .sync-fields>label>input{display:block;width:150px}
-.sync-fields .sync-actions{padding-bottom:3px}
+.sync-fields .sync-actions{padding-bottom:4px}
 .sync-save{color:var(--accent-deep);border-color:var(--accent)}
 </style>
