@@ -21,6 +21,10 @@ h1,h2{font-family:var(--serif)}
 p{margin:8px 0 12px}
 fieldset{border:0;padding:0;margin:0;min-width:0}
 fieldset:disabled{opacity:.7}
+button,.person-option,.chip,.opt,.navigation button{transition:background-color .12s,border-color .12s,color .12s}
+button:active:not(:disabled){transform:translateY(1px)}
+.primary-button:active:not(:disabled){background:var(--accent-deep)}
+.opt,.f-points input,.balance-line b,.signed-number{transition:color .15s}
 
 /* ========== 布局骨架 ========== */
 .page{max-width:1140px;margin:auto;padding:0 24px 48px}
@@ -86,7 +90,8 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .history-entry .history-item{flex:1;min-width:0;border-top:0}
 .history-actions{display:flex;align-items:center;gap:8px;flex:none}
 .history-actions button{white-space:nowrap;font-size:var(--fs-xs)}
-.history-item{display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;padding:17px 0;font-family:var(--sans);font-size:var(--fs-sm)}
+.history-item{display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;padding:17px 10px;margin:0 -10px;font-family:var(--sans);font-size:var(--fs-sm)}
+.history-item:hover:not(:disabled){background:var(--surface-2)}
 .history-item>div{display:flex;justify-content:space-between;gap:10px}
 .history-item p{color:var(--muted);overflow-wrap:anywhere}
 .signed-number{font-family:var(--mono);white-space:nowrap}
