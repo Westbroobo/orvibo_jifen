@@ -21,6 +21,21 @@ const recipients = ref(emptySelection())
 const operation = ref<'plus' | 'minus'>('plus')
 const points = ref(5)
 const reason = ref('')
+const pointQuick = [1, 2, 5, 10, 20]
+function stepPoints(step: number, event: MouseEvent) { points.value = Math.max(1, points.value + (event.shiftKey ? 5 : 1) * step) }
+function loadRecentReasons(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem('recentReasons') ?? '[]')
+    return Array.isArray(raw) ? raw.filter((item: unknown): item is string => typeof item === 'string').slice(0, 5) : []
+  } catch { return [] }
+}
+const recentReasons = ref<string[]>(loadRecentReasons())
+function rememberReason(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return
+  recentReasons.value = [trimmed, ...recentReasons.value.filter(item => item !== trimmed)].slice(0, 5)
+  try { localStorage.setItem('recentReasons', JSON.stringify(recentReasons.value)) } catch { /* 存储不可用时静默 */ }
+}
 const manual = ref<Record<string, boolean>>({})
 const mirrorRecipients = ref(false)
 const overrides = ref<Record<string, number>>({})
@@ -185,7 +200,7 @@ async function commit() {
   if (!preview.value || !validPreview.value) return
   await action(async () => {
     const result = await api<{ id: string }>('/adjustments', 'POST', { preview_token: preview.value!.preview_token, idempotency_key: idempotency.value })
-    confirmation.value = false; preview.value = null; targets.value = emptySelection(); manual.value = {}; overrides.value = {}; reason.value = ''
+    confirmation.value = false; preview.value = null; targets.value = emptySelection(); manual.value = {}; overrides.value = {}; rememberReason(reason.value); reason.value = ''
     await loadDetail(result.id); await refresh(); notice.value = '积分已记账，通知正在发送。'
   })
 }
@@ -260,8 +275,8 @@ async function confirmRecall() {
               <div class="section-title"><span class="prompt">&gt;</span> 记分</div>
               <PeoplePicker v-model="targets" :people="directory.people" :departments="directory.departments" title="记分对象" allow-all autofocus />
               <div><div class="field-label"><span class="prompt">&gt;</span> 操作类型</div><div class="f-seg"><button type="button" class="opt plus" :class="{ active: operation === 'plus' }" @click="operation = 'plus'">＋ 加分</button><button type="button" class="opt minus" :class="{ active: operation === 'minus' }" @click="operation = 'minus'">－ 扣分</button></div></div>
-              <div><label class="field-label" for="points"><span class="prompt">&gt;</span> 每人分值</label><div class="f-points"><span :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ operation === 'plus' ? '+' : '−' }}</span><input id="points" v-model.number="points" type="number" min="1" step="1" :class="operation === 'plus' ? 'plus-text' : 'minus-text'"><span class="unit">分</span><div class="stepper"><button type="button" aria-label="减少分值" @click="points = Math.max(1, points - 1)">−</button><button type="button" aria-label="增加分值" @click="points++">＋</button></div></div></div>
-              <div><label class="field-label" for="reason"><span class="prompt">&gt;</span> 原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea></div>
+              <div><label class="field-label" for="points"><span class="prompt">&gt;</span> 每人分值</label><div class="f-points"><span :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ operation === 'plus' ? '+' : '−' }}</span><input id="points" v-model.number="points" type="number" min="1" step="1" :class="operation === 'plus' ? 'plus-text' : 'minus-text'"><span class="unit">分</span><div class="stepper"><button type="button" aria-label="减少分值" @click="stepPoints(-1, $event)">−</button><button type="button" aria-label="增加分值" @click="stepPoints(1, $event)">＋</button></div></div><div class="point-quick"><button v-for="value in pointQuick" :key="value" type="button" :class="{ active: points === value }" @click="points = value">{{ value }}</button></div></div>
+              <div><label class="field-label" for="reason"><span class="prompt">&gt;</span> 原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea><div v-if="recentReasons.length" class="reason-quick"><button v-for="item in recentReasons" :key="item" type="button" :title="item" @click="reason = item">{{ item }}</button></div></div>
               <div v-if="selectedPeople.length"><div class="field-label"><span class="prompt">&gt;</span> 最终总分</div><div v-for="person in selectedPeople" :key="person.id" class="balance-row" role="group" :aria-label="`${person.name}总分`"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><span class="balance-line">{{ totals[person.id] ?? 60 }} → <b :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ manual[person.id] ? overrides[person.id] : (totals[person.id] ?? 60) + delta }}</b></span></div><label class="manual-toggle"><input type="checkbox" :checked="manual[person.id] ?? false" @change="toggleManual(person, ($event.target as HTMLInputElement).checked)">手动总分</label><input v-if="manual[person.id]" v-model.number="overrides[person.id]" class="override-input" type="number" step="1" :aria-label="`${person.name}最终总分`"></div><p v-if="selectedPeople.some(person => manual[person.id])" class="hint">手动总分已包含本次加减。</p></div>
             </div>
             <div class="form-section">

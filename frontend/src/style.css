@@ -89,6 +89,12 @@ input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .preview-details details{margin:10px 0}
 .preview-details details p{font-size:var(--fs-xs);overflow-wrap:anywhere}
 .mirror-toggle{display:flex;align-items:center;gap:7px;font-size:var(--fs-sm)}
+.point-quick{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.point-quick button{flex:none;padding:4px 10px;font-size:var(--fs-sm)}
+.point-quick button.active{border-color:var(--accent);color:var(--accent-deep);background:var(--accent-soft)}
+.reason-quick{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.reason-quick button{flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 10px;font-size:var(--fs-xs);font-family:var(--sans);background:var(--surface-2)}
+.reason-quick button:hover:not(:disabled){border-color:var(--accent)}
 
 /* ========== 发送记录 ========== */
 .empty-state{padding:55px 0;text-align:center;color:var(--muted);font-size:var(--fs-md)}
