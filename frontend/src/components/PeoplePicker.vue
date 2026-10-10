@@ -86,3 +86,32 @@ function selectVisible() { update({ person_ids: [...new Set([...props.modelValue
     <button v-if="chosen.length || stale.length" class="text-button" type="button" @click="update({ person_ids: [], extra_ids: [], levels: [[], [], []], mode: 'selected' })">清空已选</button>
   </div>
 </template>
+
+<style scoped>
+.department-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.department-grid label{font-size:var(--fs-xs);color:var(--muted)}
+.department-grid select{display:block;height:89px;padding:6px;font-size:var(--fs-xs);margin-top:4px}
+.department-grid option{padding:3px 2px}
+.picker-tools{display:flex;gap:10px;justify-content:space-between;align-items:center;margin:7px 0}
+.picker-tools small{font-size:var(--fs-xs)}
+.inline-options{display:flex;gap:20px;font-size:var(--fs-sm);margin:12px 0}
+.inline-options label{display:flex;align-items:center;gap:6px}
+.people-list{max-height:210px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-md);margin-top:8px}
+.person-option{display:flex;align-items:center;gap:9px;padding:9px 10px;cursor:pointer;border-bottom:1px solid var(--line);font-size:var(--fs-sm)}
+.person-option:last-child{border-bottom:0}
+.person-option:hover{background:var(--surface-2)}
+.person-text{min-width:0}
+.person-text b{display:block;font-size:var(--fs-sm)}
+.person-text small{display:block;line-height:1.5;font-size:var(--fs-xs);overflow-wrap:anywhere;color:var(--muted)}
+.picker-tools .pagination{margin:0}
+.picker-tools .pagination button{padding:3px}
+.extra-picker{border-top:1px solid var(--line);padding-top:8px;font-size:var(--fs-xs);color:var(--muted)}
+details input{margin-top:8px}
+.text-button{border:0;padding:2px 0;color:var(--accent-deep);background:transparent;font-size:var(--fs-xs)}
+@media(max-width:420px){
+  .department-grid{gap:5px}
+  .department-grid select{font-size:var(--fs-xs)}
+  .picker-tools .pagination{gap:3px}
+  .picker-tools .pagination button{padding:3px}
+}
+</style>
