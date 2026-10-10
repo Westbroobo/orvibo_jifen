@@ -46,6 +46,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 
 /* ========== 操作台 ========== */
 .op-form{display:flex;flex-direction:column;gap:24px}
+.op-form-body{display:flex;flex-direction:column;gap:24px}
 .form-section{display:flex;flex-direction:column;gap:20px}
 .section-title{font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);letter-spacing:.02em}
 .recipient-fold{border-top:1px solid var(--line);padding-top:8px}

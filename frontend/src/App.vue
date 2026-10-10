@@ -60,6 +60,9 @@ type Balances = { month: string; totals: Record<string, number>; versions?: Reco
 const recallConfirmation = ref<{ batchId: string; deliveryId?: string; count: number; names: string } | null>(null)
 const adminQuery = ref('')
 const clock = ref(Date.now())
+const confirmSend = ref<HTMLButtonElement | null>(null)
+const recallSend = ref<HTMLButtonElement | null>(null)
+const detailClose = ref<HTMLButtonElement | null>(null)
 let timer: ReturnType<typeof setInterval> | undefined
 let resolveTimer: ReturnType<typeof setTimeout> | undefined
 let resolveSequence = 0
@@ -121,6 +124,15 @@ async function action(fn: () => Promise<void>) {
   busy.value = true; error.value = ''; notice.value = ''
   try { await fn() } catch (e) { error.value = e instanceof Error ? e.message : '操作失败' } finally { busy.value = false }
 }
+function onKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || busy.value) return
+  if (recallConfirmation.value) recallConfirmation.value = null
+  else if (detail.value) closeDetail()
+  else if (confirmation.value) confirmation.value = false
+}
+watch(confirmation, async (value) => { if (value) { await nextTick(); confirmSend.value?.focus() } })
+watch(recallConfirmation, async (value) => { if (value) { await nextTick(); recallSend.value?.focus() } })
+watch(detail, async (value) => { if (value) { await nextTick(); detailClose.value?.focus() } })
 async function refresh() {
   const [data, balances, configs] = await Promise.all([api<Directory>('/directory'), api<Balances>('/balances'), api<Preset[]>('/presets')])
   directory.value = data; applyBalances(balances); presets.value = configs
@@ -152,6 +164,7 @@ async function initialize() {
   ready.value = true
 }
 onMounted(async () => {
+  window.addEventListener('keydown', onKeydown)
   if (new URLSearchParams(location.search).has('login_error')) error.value = '飞书授权未完成，请重新登录'
   await initialize()
   timer = setInterval(() => {
@@ -184,7 +197,7 @@ watch(notice, async (value) => {
 })
 function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
 function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
-onUnmounted(() => { clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
+onUnmounted(() => { window.removeEventListener('keydown', onKeydown); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
 let previewTimer: ReturnType<typeof setTimeout> | undefined
 const previewReady = computed(() => !busy.value && selectedPeople.value.length > 0 && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
 watch([targets, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings], () => {
@@ -296,7 +309,7 @@ async function confirmRecall() {
       <nav class="navigation" aria-label="功能导航"><button :class="{ active: page === 'console' }" :disabled="busy" @click="switchPage('console')">操作台</button><button :class="{ active: page === 'history' }" :disabled="busy" @click="switchPage('history')">发送记录</button><button v-if="user.role === 'admin'" :class="{ active: page === 'admin' }" :disabled="busy" @click="switchPage('admin')">权限管理</button><span>{{ month }}</span></nav>
       <main v-if="page === 'console'" class="layout">
         <section class="panel" aria-label="积分操作">
-          <fieldset class="op-form" :disabled="busy">
+          <form class="op-form" @submit.prevent="makePreview"><fieldset class="op-form-body" :disabled="busy">
             <div class="form-section">
               <div class="section-title"><span class="prompt">&gt;</span> 记分</div>
               <PeoplePicker v-model="targets" :people="directory.people" :departments="directory.departments" title="记分对象" allow-all autofocus />
@@ -316,9 +329,9 @@ async function confirmRecall() {
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
-            <button class="primary-button" :class="{ busy }" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
+            <button class="primary-button" :class="{ busy }" type="submit" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length">{{ busy ? '正在处理…' : '更新预览' }}</button>
             <p v-if="submitHint" class="hint submit-hint" aria-live="polite">{{ submitHint }}</p>
-          </fieldset>
+          </fieldset></form>
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
           <select v-if="(preview?.rows.length ?? selectedPeople.length) > 1" v-model.number="previewIndex" aria-label="切换卡片预览人员"><option v-for="(person, index) in (preview ? preview.rows.map(r => r.person) : selectedPeople)" :key="person.id" :value="index">{{ person.name }}</option></select>
@@ -344,11 +357,11 @@ async function confirmRecall() {
     </template>
   </div>
   <Transition name="modal">
-  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p class="reason-box">{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button :disabled="busy" @click="confirmation = false">返回</button><button class="primary-button" :class="{ busy }" :disabled="busy || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
+  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p class="reason-box">{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button :disabled="busy" @click="confirmation = false">返回</button><button ref="confirmSend" class="primary-button" :class="{ busy }" :disabled="busy || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
   <Transition name="modal">
   <div v-if="detail" class="modal-backdrop" @click.self="!busy && closeDetail()">
     <section class="panel modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-      <div class="flex-head"><h2 id="detail-title" class="panel-title">发送及撤回结果</h2><button aria-label="关闭发送结果" :disabled="busy" @click="closeDetail">×</button></div>
+      <div class="flex-head"><h2 id="detail-title" class="panel-title">发送及撤回结果</h2><button ref="detailClose" aria-label="关闭发送结果" :disabled="busy" @click="closeDetail">×</button></div>
       <div class="modal-section-title">逐人积分状态</div>
       <div class="score-results" aria-label="逐人积分状态">
         <div v-for="row in detailScoreRows" :key="row.person.id" class="score-result">
@@ -379,7 +392,7 @@ async function confirmRecall() {
       <p>撤回 {{ recallConfirmation.count }} 条卡片</p>
       <p class="hint">全部通知撤回成功后，对应记分作废；部分撤回仍有效。</p>
       <p v-if="error" class="error-text">{{ error }}</p>
-      <div class="modal-actions"><button :disabled="busy" @click="recallConfirmation = null">取消</button><button class="primary-button" :class="{ busy }" :disabled="busy" @click="confirmRecall">{{ busy ? '正在提交…' : '确认撤回' }}</button></div>
+      <div class="modal-actions"><button :disabled="busy" @click="recallConfirmation = null">取消</button><button ref="recallSend" class="primary-button" :class="{ busy }" :disabled="busy" @click="confirmRecall">{{ busy ? '正在提交…' : '确认撤回' }}</button></div>
     </section>
   </div>
 </Transition>
