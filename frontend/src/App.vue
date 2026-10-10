@@ -138,8 +138,14 @@ onMounted(async () => {
     }
   }, 3000)
 })
-onUnmounted(() => { clearInterval(timer); clearTimeout(resolveTimer) })
-watch([targets, recipients, operation, points, reason, manual, overrides], () => { preview.value = null; confirmation.value = false; idempotency.value = '' }, { deep: true })
+onUnmounted(() => { clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer) })
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+const previewReady = computed(() => !busy.value && selectedPeople.value.length > 0 && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
+watch([targets, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings], () => {
+  clearTimeout(previewTimer)
+  if (!previewReady.value) { preview.value = null; confirmation.value = false; idempotency.value = ''; return }
+  previewTimer = setTimeout(() => { void makePreview() }, 600)
+}, { deep: true })
 watch([recipients, directory], () => {
   clearTimeout(resolveTimer); const sequence = ++resolveSequence
   resolveTimer = setTimeout(async () => {
@@ -154,6 +160,8 @@ function toggleManual(person: Person, checked: boolean) {
   if (checked) overrides.value[person.id] = (totals.value[person.id] ?? 60) + delta.value
 }
 async function makePreview() {
+  if (busy.value) return
+  if (!selectedPeople.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
   await action(async () => {
     if (!Number.isInteger(points.value) || points.value <= 0) throw new Error('请输入正整数分值')
     const values: Record<string, number> = {}
