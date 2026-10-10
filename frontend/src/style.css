@@ -45,7 +45,13 @@ button:active:not(:disabled){transform:translateY(1px)}
 .empty-preview-logo{opacity:.65}
 
 /* ========== 操作台 ========== */
-.op-form{display:flex;flex-direction:column;gap:16px}
+.op-form{display:flex;flex-direction:column;gap:24px}
+.form-section{display:flex;flex-direction:column;gap:20px}
+.section-title{font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);letter-spacing:.02em}
+.recipient-fold{border-top:1px solid var(--line);padding-top:8px}
+.recipient-fold summary{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);margin-bottom:8px}
+.recipient-fold summary b{font-family:var(--mono);font-weight:700;color:var(--text)}
+.recipient-fold summary small{font-size:var(--fs-xs)}
 .field-label{display:block;font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);margin-bottom:8px;letter-spacing:.02em}
 .field-label .prompt{margin-right:5px}
 .field-label small{margin-left:5px}
@@ -69,7 +75,6 @@ button:active:not(:disabled){transform:translateY(1px)}
 .manual-toggle{display:flex;align-items:center;gap:5px;font-size:var(--fs-xs);color:var(--muted)}
 input.override-input{width:90px;font-family:var(--mono);padding:5px}
 .hint{font-size:var(--fs-xs);color:var(--muted);line-height:1.7}
-.section-divider{height:1px;background:var(--line);margin:2px 0}
 .preset-actions{display:flex;gap:6px;margin-top:8px}
 .preset-actions input{flex:1}
 .preset-actions button{white-space:nowrap;padding:5px 8px}
