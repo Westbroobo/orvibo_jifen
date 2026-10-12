@@ -60,12 +60,14 @@ class Membership(Base):
 
 class Preset(Base):
     __tablename__ = "orvibo_jifen_presets"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="个人发送配置 ID（UUID）")
-    owner_id: Mapped[str] = mapped_column(String(36), index=True, comment="配置所属员工 ID，仅本人可访问")
-    name: Mapped[str] = mapped_column(String(100), comment="配置名称，同一用户下不可重复")
-    selection: Mapped[dict] = mapped_column(JSON, comment="通知范围条件：部门层级、选择模式、勾选人员及额外人员")
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="发送名单 ID（UUID）")
+    owner_id: Mapped[str] = mapped_column(String(36), index=True, comment="名单创建人 ID；个人名单仅本人可访问")
+    scope: Mapped[str] = mapped_column(String(20), default="personal", server_default="personal", comment="名单可见范围：personal 个人，public 公共（管理员维护）")
+    name: Mapped[str] = mapped_column(String(100), comment="名单名称，公共名单全局唯一，个人名单在本人名下唯一")
+    selection: Mapped[dict] = mapped_column(JSON, comment="通知范围条件：匹配方式、部门 ID、部门层级及指定人员")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="配置最近更新时间（UTC）")
-    __table_args__ = (UniqueConstraint("owner_id", "name"), {"comment": "用户私有的通知范围配置"})
+    __table_args__ = (UniqueConstraint("owner_id", "scope", "name", name="uq_presets_owner_scope_name"),
+                      Index("ix_presets_scope_name", "scope", "name"), {"comment": "公共及个人发送名单，使用时按最新人员目录解析"})
 
 
 class Balance(Base):

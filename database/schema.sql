@@ -466,3 +466,65 @@ DROP PROCEDURE orvibo_jifen_remove_foreign_keys;
 SELECT COUNT(*) AS `积分系统剩余外键数量`
 FROM information_schema.REFERENTIAL_CONSTRAINTS
 WHERE CONSTRAINT_SCHEMA = DATABASE() AND LEFT(TABLE_NAME, 13) = 'orvibo_jifen_';
+
+-- =====================================================================
+-- 增量 2026-10-12（第七段）：公共及个人发送名单
+-- 先停止 API/worker，确认第六段已执行，在同一 SQL 会话执行整个本段。
+-- 原名单全部保留为个人名单，原部门交集规则不变；新建名单使用部门并集。
+-- 不增加外键；公共名称由应用事务锁校验，个人名称由唯一索引校验。
+-- 可重复执行；需要 ALTER 和 CREATE ROUTINE 权限，执行后删除临时过程。
+-- =====================================================================
+SET NAMES utf8mb4;
+DROP PROCEDURE IF EXISTS orvibo_jifen_upgrade_presets;
+DELIMITER $$
+CREATE PROCEDURE orvibo_jifen_upgrade_presets()
+BEGIN
+    DECLARE finished BOOL DEFAULT FALSE;
+    DECLARE old_index VARCHAR(100);
+    DECLARE old_unique_indexes CURSOR FOR
+        SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orvibo_jifen_presets'
+          AND NON_UNIQUE = 0 AND INDEX_NAME <> 'PRIMARY'
+        GROUP BY INDEX_NAME
+        HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',') = 'owner_id,name';
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET finished = TRUE;
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orvibo_jifen_presets') THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '缺少积分系统名单表，请先执行前置增量';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orvibo_jifen_presets' AND COLUMN_NAME = 'scope') THEN
+        ALTER TABLE orvibo_jifen_presets ADD COLUMN scope VARCHAR(20) NOT NULL DEFAULT 'personal'
+            COMMENT '名单可见范围：personal 个人，public 公共（管理员维护）' AFTER owner_id;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orvibo_jifen_presets' AND INDEX_NAME = 'uq_presets_owner_scope_name') THEN
+        ALTER TABLE orvibo_jifen_presets ADD UNIQUE INDEX uq_presets_owner_scope_name (owner_id, scope, name)
+            COMMENT '同一创建人及可见范围内名单名称唯一';
+    END IF;
+    OPEN old_unique_indexes;
+    remove_loop: LOOP
+        FETCH old_unique_indexes INTO old_index;
+        IF finished THEN LEAVE remove_loop; END IF;
+        SET @jifen_presets_sql = CONCAT('ALTER TABLE orvibo_jifen_presets DROP INDEX `', REPLACE(old_index, '`', '``'), '`');
+        PREPARE jifen_presets_statement FROM @jifen_presets_sql;
+        EXECUTE jifen_presets_statement;
+        DEALLOCATE PREPARE jifen_presets_statement;
+    END LOOP;
+    CLOSE old_unique_indexes;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'orvibo_jifen_presets' AND INDEX_NAME = 'ix_presets_scope_name') THEN
+        ALTER TABLE orvibo_jifen_presets ADD INDEX ix_presets_scope_name (scope, name)
+            COMMENT '查询公共名单及校验同名名单';
+    END IF;
+    ALTER TABLE orvibo_jifen_presets
+        COMMENT = '公共及个人发送名单，使用时按最新人员目录解析',
+        MODIFY id VARCHAR(36) NOT NULL COMMENT '发送名单 ID（UUID）',
+        MODIFY owner_id VARCHAR(36) NOT NULL COMMENT '名单创建人 ID；个人名单仅本人可访问',
+        MODIFY name VARCHAR(100) NOT NULL COMMENT '名单名称，公共名单全局唯一，个人名单在本人名下唯一',
+        MODIFY selection JSON NOT NULL COMMENT '通知范围条件：匹配方式、部门 ID、部门层级及指定人员';
+END$$
+DELIMITER ;
+CALL orvibo_jifen_upgrade_presets();
+DROP PROCEDURE orvibo_jifen_upgrade_presets;

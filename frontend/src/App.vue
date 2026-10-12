@@ -1,24 +1,26 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
-import { emptySelection, recallLabels, statusLabels } from './types'
+import { emptySelection, unionSelection, recallLabels, statusLabels } from './types'
 import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
 import PeoplePicker from './components/PeoplePicker.vue'
 import CardPreview from './components/CardPreview.vue'
 import EmployeeAvatar from './components/EmployeeAvatar.vue'
 import DirectorySync from './components/DirectorySync.vue'
+import RecipientLists from './components/RecipientLists.vue'
+import RecipientRangeEditor from './components/RecipientRangeEditor.vue'
 
 const logoUrl = '/logo.svg'
 const user = ref<User | null>(null)
 const ready = ref(false)
 const redirectingToFeishu = ref(false)
 const demoAvailable = ref(false)
-const page = ref<'console' | 'history' | 'admin'>('console')
+const page = ref<'console' | 'lists' | 'history' | 'admin'>('console')
 const directory = ref<Directory>({ people: [], departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false })
 const totals = ref<Record<string, number>>({})
 const month = ref('')
 const targets = ref(emptySelection())
-const recipients = ref(emptySelection())
+const recipients = ref(unionSelection())
 const operation = ref<'plus' | 'minus'>('plus')
 const points = ref(5)
 const reason = ref('')
@@ -49,7 +51,13 @@ const error = ref('')
 const notice = ref('')
 const presets = ref<Preset[]>([])
 const presetId = ref('')
-const presetName = ref('')
+const rangeDialog = ref(false)
+const rangeDraft = ref(unionSelection())
+const rangeReady = ref(false)
+const rangeClose = ref<HTMLButtonElement | null>(null)
+const recipientsResolving = ref(false)
+const publicPresets = computed(() => presets.value.filter(p => p.scope === 'public'))
+const personalPresets = computed(() => presets.value.filter(p => p.scope === 'personal'))
 const resolvedRecipients = ref<Person[]>([])
 const recipientWarnings = ref<string[]>([])
 const history = ref<HistoryItem[]>([])
@@ -128,7 +136,8 @@ async function action(fn: () => Promise<void>) {
 }
 function onKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape' || busy.value) return
-  if (recallConfirmation.value) recallConfirmation.value = null
+  if (rangeDialog.value) rangeDialog.value = false
+  else if (recallConfirmation.value) recallConfirmation.value = null
   else if (detail.value) closeDetail()
   else if (confirmation.value) confirmation.value = false
 }
@@ -147,9 +156,17 @@ watch(detail, async (value) => {
   if (value) { captureOpener(); await nextTick(); detailClose.value?.focus() }
   else restoreOpener()
 })
+watch(rangeDialog, async (value) => {
+  if (value) { captureOpener(); await nextTick(); rangeClose.value?.focus() }
+  else { await nextTick(); restoreOpener() }
+})
 async function refresh() {
   const [data, balances, configs] = await Promise.all([api<Directory>('/directory'), api<Balances>('/balances'), api<Preset[]>('/presets')])
   directory.value = data; applyBalances(balances); presets.value = configs
+  if (presetId.value && !mirrorRecipients.value) {
+    if (!configs.some(p => p.id === presetId.value)) { presetId.value = ''; notice.value = '原发送名单已删除，请重新选择。' }
+    loadPreset()
+  }
 }
 function applyBalances(balances: Balances) {
   if (preview.value && (preview.value.month !== balances.month || preview.value.rows.some(row =>
@@ -189,13 +206,12 @@ onMounted(async () => {
     }
   }, 3000)
 })
-const recipientsPending = computed(() => (recipients.value.person_ids.length > 0 || recipients.value.extra_ids.length > 0 || recipients.value.levels.some(l => l.length)) && !resolvedRecipients.value.length)
 const submitHint = computed(() => {
   if (busy.value) return '正在处理…'
   if (!selectedPeople.value.length) return '请先选择记分对象'
   if (!reason.value.trim()) return '请填写原因'
   if (recipientWarnings.value.length) return '通知范围存在冲突,请先处理'
-  if (recipientsPending.value) return '正在解析通知范围…'
+  if (recipientsResolving.value) return '正在解析通知范围…'
   if (!resolvedRecipients.value.length) return '请选择通知范围'
   return ''
 })
@@ -213,22 +229,25 @@ function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
 function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
 onUnmounted(() => { window.removeEventListener('keydown', onKeydown); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
 let previewTimer: ReturnType<typeof setTimeout> | undefined
-const previewReady = computed(() => !busy.value && selectedPeople.value.length > 0 && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
-watch([targets, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings], () => {
+const previewReady = computed(() => !busy.value && !recipientsResolving.value && selectedPeople.value.length > 0 && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
+watch([targets, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings, recipientsResolving], () => {
   clearTimeout(previewTimer)
-  if (!previewReady.value) { preview.value = null; confirmation.value = false; idempotency.value = ''; return }
+  preview.value = null; confirmation.value = false; idempotency.value = ''
+  if (!previewReady.value) return
   previewTimer = setTimeout(() => { void makePreview() }, 600)
 }, { deep: true })
 watch([recipients, directory], () => {
   clearTimeout(resolveTimer); const sequence = ++resolveSequence
+  recipientsResolving.value = true
   resolveTimer = setTimeout(async () => {
     if (!authorized.value) return
     try { const result = await api<{ people: Person[]; warnings: string[] }>('/ranges/resolve', 'POST', recipients.value); if (sequence === resolveSequence) { resolvedRecipients.value = result.people; recipientWarnings.value = result.warnings } }
-    catch (e) { if (sequence === resolveSequence) recipientWarnings.value = [e instanceof Error ? e.message : '范围解析失败'] }
+    catch (e) { if (sequence === resolveSequence) { resolvedRecipients.value = []; recipientWarnings.value = [e instanceof Error ? e.message : '范围解析失败'] } }
+    finally { if (sequence === resolveSequence) recipientsResolving.value = false }
   }, 150)
 }, { deep: true })
 watch([targets, mirrorRecipients], () => {
-  if (mirrorRecipients.value) recipients.value = JSON.parse(JSON.stringify(targets.value))
+  if (mirrorRecipients.value) { presetId.value = ''; recipients.value = JSON.parse(JSON.stringify(targets.value)) }
 }, { deep: true })
 
 function toggleManual(person: Person, checked: boolean) {
@@ -237,7 +256,7 @@ function toggleManual(person: Person, checked: boolean) {
 }
 async function makePreview() {
   if (busy.value) return
-  if (!selectedPeople.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
+  if (recipientsResolving.value || !selectedPeople.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
   await action(async () => {
     if (!Number.isInteger(points.value) || points.value <= 0) throw new Error('请输入正整数分值')
     const values: Record<string, number> = {}
@@ -256,11 +275,25 @@ async function commit() {
 }
 function loadPreset() {
   const preset = presets.value.find(p => p.id === presetId.value)
-  presetName.value = preset?.name ?? ''
-  recipients.value = preset ? JSON.parse(JSON.stringify(preset.selection)) : emptySelection()
+  mirrorRecipients.value = false
+  recipients.value = preset ? JSON.parse(JSON.stringify(preset.selection)) : unionSelection()
 }
-async function savePreset() { await action(async () => { const saved = await api<Preset>(presetId.value ? `/presets/${presetId.value}` : '/presets', presetId.value ? 'PUT' : 'POST', { name: presetName.value, selection: recipients.value }); presets.value = await api<Preset[]>('/presets'); presetId.value = saved.id; notice.value = '个人发送配置已保存。' }) }
-async function deletePreset() { await action(async () => { await api(`/presets/${presetId.value}`, 'DELETE'); presets.value = presets.value.filter(p => p.id !== presetId.value); presetId.value = ''; presetName.value = ''; notice.value = '配置已删除。' }) }
+function savedPreset(saved: Preset) {
+  presets.value = [saved, ...presets.value.filter(p => p.id !== saved.id)]
+  if (presetId.value === saved.id) loadPreset()
+}
+function deletedPreset(id: string) {
+  presets.value = presets.value.filter(p => p.id !== id)
+  if (presetId.value === id) { presetId.value = ''; loadPreset() }
+}
+function editRange() {
+  rangeDraft.value = JSON.parse(JSON.stringify(recipients.value)); rangeReady.value = false; rangeDialog.value = true
+}
+function applyRange() {
+  if (!rangeReady.value || busy.value) return
+  mirrorRecipients.value = false; presetId.value = ''; recipients.value = JSON.parse(JSON.stringify(rangeDraft.value)); rangeDialog.value = false
+}
+function clearRecipientRange() { mirrorRecipients.value = false; presetId.value = ''; recipients.value = unionSelection() }
 async function loadHistory() {
   loadingHistory.value = true
   try {
@@ -300,7 +333,7 @@ async function confirmRecall() {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page" :inert="rangeDialog">
     <header class="topbar">
       <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="36" height="36"><span>ORVIBO_员工积分系统</span></a>
       <div v-if="user" class="topbar-right">
@@ -320,7 +353,7 @@ async function confirmRecall() {
     <section v-else-if="!user" class="panel login-panel"><h1>{{ error ? '暂时无法进入系统' : '已退出登录' }}</h1><p v-if="!error">需要继续使用时，请授权飞书账号。</p><a class="primary-button" href="/api/auth/login">{{ error ? '重新授权飞书账号' : '使用飞书账号授权' }}</a><button v-if="demoAvailable" type="button" :disabled="busy" @click="action(async () => { await api('/auth/demo', 'POST'); await initialize() })">进入本地演示</button></section>
     <section v-else-if="!authorized" class="panel login-panel"><h1>当前账号暂无操作权限</h1><p>请联系管理员分配积分操作权限。{{ user.status === 'unknown' ? '人员目录尚待同步核实。' : '' }}</p><button type="button" :disabled="busy" @click="action(initialize)">重新检查权限</button></section>
     <template v-else>
-      <nav class="navigation" aria-label="功能导航"><button type="button" :class="{ active: page === 'console' }" :disabled="busy" @click="switchPage('console')">操作台</button><button type="button" :class="{ active: page === 'history' }" :disabled="busy" @click="switchPage('history')">发送记录</button><button v-if="user.role === 'admin'" type="button" :class="{ active: page === 'admin' }" :disabled="busy" @click="switchPage('admin')">权限管理</button><span>{{ month }}</span></nav>
+      <nav class="navigation" aria-label="功能导航"><button type="button" :class="{ active: page === 'console' }" :disabled="busy" @click="switchPage('console')">操作台</button><button type="button" :class="{ active: page === 'lists' }" :disabled="busy" @click="switchPage('lists')">发送名单</button><button type="button" :class="{ active: page === 'history' }" :disabled="busy" @click="switchPage('history')">发送记录</button><button v-if="user.role === 'admin'" type="button" :class="{ active: page === 'admin' }" :disabled="busy" @click="switchPage('admin')">权限管理</button><span>{{ month }}</span></nav>
       <main v-if="page === 'console'" class="layout">
         <section class="panel" aria-label="积分操作">
           <form class="op-form" @submit.prevent="makePreview"><fieldset class="op-form-body" :disabled="busy">
@@ -332,13 +365,11 @@ async function confirmRecall() {
               <div v-if="selectedPeople.length"><div class="field-label"><span class="prompt">&gt;</span> 最终总分</div><div v-for="person in selectedPeople" :key="person.id" class="balance-row" role="group" :aria-label="`${person.name}总分`"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><span class="balance-line">{{ totals[person.id] ?? 60 }} → <b :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ manual[person.id] ? overrides[person.id] : (totals[person.id] ?? 60) + delta }}</b></span></div><label class="manual-toggle"><input type="checkbox" :checked="manual[person.id] ?? false" @change="toggleManual(person, ($event.target as HTMLInputElement).checked)">手动总分</label><input v-if="manual[person.id]" v-model.number="overrides[person.id]" class="override-input" type="number" step="1" :aria-label="`${person.name}最终总分`"></div><p v-if="selectedPeople.some(person => manual[person.id])" class="hint">手动总分已包含本次加减。</p></div>
             </div>
             <div class="form-section">
-              <div class="section-title"><span class="prompt">&gt;</span> 发送配置</div>
-              <div><div class="field-label"><span class="prompt">&gt;</span> 个人发送配置</div><select v-model="presetId" aria-label="选择个人发送配置" @change="loadPreset"><option value="">临时范围</option><option v-for="preset in presets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></select><div class="preset-actions"><input v-model="presetName" aria-label="发送配置名称" placeholder="配置名称"><button type="button" :disabled="!presetName.trim()" @click="savePreset">{{ presetId ? '更新' : '保存' }}</button><button v-if="presetId" type="button" @click="deletePreset">删除</button></div></div>
+              <div class="recipient-heading"><label class="field-label" for="recipient-preset"><span class="prompt">&gt;</span> 发送名单</label><button type="button" class="text-link" @click="switchPage('lists')">维护名单</button></div>
+              <select id="recipient-preset" v-model="presetId" aria-label="选择发送名单" :disabled="mirrorRecipients" @change="loadPreset"><option value="">临时范围</option><optgroup v-if="publicPresets.length" label="公共名单"><option v-for="preset in publicPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup><optgroup v-if="personalPresets.length" label="我的名单"><option v-for="preset in personalPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup></select>
               <label class="mirror-toggle"><input type="checkbox" v-model="mirrorRecipients">通知范围同记分对象</label>
-              <details v-if="!mirrorRecipients" class="recipient-fold" :open="!!recipientWarnings.length">
-                <summary><span class="prompt">&gt;</span> 通知范围 <b>{{ resolvedRecipients.length }}</b> 人<small v-if="recipientWarnings.length"> · 存在冲突</small></summary>
-                <PeoplePicker v-model="recipients" :people="directory.people" :departments="directory.departments" title="通知范围" allow-all />
-              </details>
+              <div class="recipient-toolbar"><span>{{ recipientsResolving ? '正在匹配…' : `${resolvedRecipients.length} 位通知对象` }}</span><div v-if="!mirrorRecipients" class="recipient-range-actions"><button v-if="resolvedRecipients.length || recipientWarnings.length" type="button" class="text-link" @click="clearRecipientRange">清空</button><button type="button" @click="editRange">{{ presetId ? '临时调整' : '选择范围' }}</button></div></div>
+              <details v-if="resolvedRecipients.length" class="recipient-fold"><summary>查看通知名单</summary><div class="chips recipient-chips"><span v-for="person in resolvedRecipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details>
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
@@ -356,6 +387,7 @@ async function confirmRecall() {
           <button v-else class="primary-button" type="button" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button>
         </div>
       </main>
+      <RecipientLists v-else-if="page === 'lists'" :presets="presets" :directory="directory" :user="user" @saved="savedPreset" @deleted="deletedPreset" />
       <section v-else-if="page === 'history'" class="panel">
         <div class="panel-head flex-head"><h1 class="panel-title">发送记录</h1><button type="button" :disabled="busy" @click="action(loadHistory)">刷新</button></div>
         <div v-if="loadingHistory" class="empty-state">加载中…</div>
@@ -413,4 +445,13 @@ async function confirmRecall() {
     </section>
   </div>
 </Transition>
+  <Transition name="modal">
+    <div v-if="rangeDialog" class="modal-backdrop" @click.self="!busy && (rangeDialog = false)">
+      <section class="panel modal range-modal" role="dialog" aria-modal="true" aria-labelledby="range-dialog-title">
+        <div class="panel-head flex-head"><h2 id="range-dialog-title" class="panel-title">临时通知范围</h2><button ref="rangeClose" type="button" :disabled="busy" @click="rangeDialog = false">取消</button></div>
+        <RecipientRangeEditor v-model="rangeDraft" :people="directory.people" :departments="directory.departments" @ready="rangeReady = $event" />
+        <div class="modal-actions"><button type="button" class="primary-button" :disabled="busy || !rangeReady" @click="applyRange">使用此范围</button></div>
+      </section>
+    </div>
+  </Transition>
 </template>

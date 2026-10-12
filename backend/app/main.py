@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 
 from . import auth
 from .adjustments import commit_preview, create_preview, month_at, require_operator
@@ -11,9 +10,10 @@ from .config import get_settings
 from .db import get_db, lock_state, now_utc
 from .delivery import retry_delivery
 from .directory import employee_views, in_selection_path, resolve_selection
-from .models import Balance, Batch, Delivery, Employee, Ledger, MessageRecall, PermissionAudit, Preset, SystemState
+from .models import Balance, Batch, Delivery, Employee, Ledger, MessageRecall, PermissionAudit, SystemState
+from .presets import router as presets_router
 from .recall import can_recall, recall_deadline, recall_summary, request_recall
-from .schemas import AdjustmentRequest, CommitRequest, PresetRequest, RoleRequest, Selection, SyncScheduleRequest
+from .schemas import AdjustmentRequest, CommitRequest, RoleRequest, Selection, SyncScheduleRequest
 from .sync_schedule import first_sync_at, schedule_view
 
 settings = get_settings()
@@ -27,6 +27,7 @@ async def lifespan(app):
 
 app = FastAPI(title="ORVIBO_员工积分系统", version="1.0.0", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(presets_router)
 
 
 @app.middleware("http")
@@ -80,53 +81,6 @@ def balances(user=Depends(auth.operator), db=Depends(get_db)):
     rows = db.scalars(select(Balance).where(Balance.month == month)).all()
     return {"month": month, "totals": {b.employee_id: b.total for b in rows},
             "versions": {b.employee_id: b.version for b in rows}}
-
-
-@app.get("/api/presets")
-def presets(user=Depends(auth.operator), db=Depends(get_db)):
-    return [{"id": p.id, "name": p.name, "selection": p.selection}
-            for p in db.scalars(select(Preset).where(Preset.owner_id == user.id).order_by(Preset.updated_at.desc()))]
-
-
-def save_preset(db, user, body, preset=None):
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(422, "配置名称不能为空")
-    if not preset:
-        preset = Preset(owner_id=user.id, name=name, selection=body.selection.model_dump())
-        db.add(preset)
-    else:
-        preset.name, preset.selection, preset.updated_at = name, body.selection.model_dump(), now_utc()
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(409, "已有同名个人配置") from exc
-    return {"id": preset.id, "name": preset.name, "selection": preset.selection}
-
-
-@app.post("/api/presets", status_code=201)
-def new_preset(body: PresetRequest, user=Depends(auth.operator), db=Depends(get_db)):
-    return save_preset(db, user, body)
-
-
-def owned_preset(db, user, preset_id):
-    preset = db.get(Preset, preset_id)
-    if not preset or preset.owner_id != user.id:
-        raise HTTPException(404, "配置不存在")
-    return preset
-
-
-@app.put("/api/presets/{preset_id}")
-def update_preset(preset_id: str, body: PresetRequest, user=Depends(auth.operator), db=Depends(get_db)):
-    return save_preset(db, user, body, owned_preset(db, user, preset_id))
-
-
-@app.delete("/api/presets/{preset_id}")
-def delete_preset(preset_id: str, user=Depends(auth.operator), db=Depends(get_db)):
-    db.delete(owned_preset(db, user, preset_id))
-    db.commit()
-    return {"ok": True}
 
 
 @app.post("/api/adjustments/preview")

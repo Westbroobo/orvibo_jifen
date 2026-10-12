@@ -5,10 +5,20 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_
 
 class Selection(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    match_mode: Literal["intersection", "union"] = "intersection"
+    department_ids: list[str] = Field(default_factory=list, max_length=2000)
     levels: list[list[str]] = Field(default_factory=lambda: [[], [], []], min_length=3, max_length=3)
     mode: Literal["all", "selected"] = "selected"
     person_ids: list[str] = Field(default_factory=list, max_length=2000)
     extra_ids: list[str] = Field(default_factory=list, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_matching(self):
+        if self.match_mode == "union" and any(self.levels):
+            raise ValueError("组合名单不能同时使用旧版部门交集条件")
+        if self.match_mode == "intersection" and self.department_ids:
+            raise ValueError("部门组合须使用并集匹配方式")
+        return self
 
 
 class AdjustmentRequest(BaseModel):
@@ -40,7 +50,9 @@ class CommitRequest(BaseModel):
 
 
 class PresetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=100)
+    scope: Literal["personal", "public"] = "personal"
     selection: Selection
 
 

@@ -33,6 +33,8 @@ def in_selection_path(person, levels):
 def resolve_selection(db, selection: Selection):
     warnings = []
     active_departments = {d.id: d for d in db.scalars(select(Department).where(Department.active.is_(True)))}
+    if selection.match_mode == "union":
+        return resolve_union(db, selection, active_departments)
     for level, ids in enumerate(selection.levels):
         for department_id in ids:
             department = active_departments.get(department_id)
@@ -53,6 +55,24 @@ def resolve_selection(db, selection: Selection):
         elif person_id in selection.person_ids and person_id not in matches and person_id not in selection.extra_ids:
             warnings.append(f"人员已不符合部门范围：{person['name']}")
     chosen |= {i for i in selection.extra_ids if i in by_id and by_id[i]["status"] == "active"}
+    return {"people": [by_id[i] for i in sorted(chosen)], "warnings": sorted(set(warnings))}
+
+
+def resolve_union(db, selection, active_departments):
+    warnings = [f"部门已失效：{i}" for i in sorted(set(selection.department_ids) - active_departments.keys())]
+    department_ids = set(selection.department_ids) & active_departments.keys()
+    people = employee_views(db)
+    by_id = {p["id"]: p for p in people}
+    # Any chosen department or its descendant membership matches. Never select
+    # everyone when the department/person lists are empty; deduplicate by ID.
+    chosen = {p["id"] for p in people if p["status"] == "active"
+              and any(department_ids.intersection(path["ids"]) for path in p["paths"])}
+    for person_id in set(selection.person_ids) | set(selection.extra_ids):
+        person = by_id.get(person_id)
+        if not person or person["status"] != "active":
+            warnings.append(f"人员不可用：{person['name'] if person else person_id}")
+        else:
+            chosen.add(person_id)
     return {"people": [by_id[i] for i in sorted(chosen)], "warnings": sorted(set(warnings))}
 
 

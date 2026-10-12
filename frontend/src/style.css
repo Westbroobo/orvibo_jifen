@@ -32,7 +32,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 .brand{display:inline-flex;align-items:center;gap:12px;font-family:var(--serif);font-size:var(--fs-brand);font-weight:700;white-space:nowrap;min-width:0}
 .brand-logo{display:block;flex:none;width:36px;height:36px}
 .topbar-right{display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:flex-end;margin-left:auto;max-width:100%}
-.navigation{display:flex;gap:8px;align-items:center;margin:0 0 24px}
+.navigation{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 24px}
 .navigation button{border-color:transparent;background:transparent;padding:8px 16px;color:var(--muted)}
 .navigation button.active{background:var(--surface-2);border-color:var(--line);color:var(--text)}
 .navigation>span{margin-left:auto;color:var(--muted);font-size:var(--fs-xs)}
@@ -76,9 +76,14 @@ button:active:not(:disabled){transform:translateY(1px)}
 .manual-toggle{grid-column:2;grid-row:2;justify-self:end;display:flex;align-items:center;gap:4px;font-size:var(--fs-xs);color:var(--muted)}
 input.override-input{grid-column:3;grid-row:2;width:90px;font-family:var(--mono);padding:4px}
 .hint{font-size:var(--fs-xs);color:var(--muted);line-height:1.7}
-.preset-actions{display:flex;gap:8px;margin-top:8px}
-.preset-actions input{flex:1}
-.preset-actions button{white-space:nowrap;padding:4px 8px}
+.recipient-heading,.recipient-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.recipient-heading .field-label{margin:0}
+.text-link{border:0;background:none;padding:0;color:var(--accent-deep);font-size:var(--fs-xs)}
+.recipient-toolbar{font-size:var(--fs-sm);color:var(--muted)}
+.recipient-toolbar button{padding:5px 12px}
+.recipient-range-actions{display:flex;align-items:center;gap:6px}
+.recipient-chips{max-height:220px;overflow:auto}
+.modal.range-modal{width:650px}
 .send-summary{font-size:var(--fs-sm);color:var(--muted);border-top:1px solid var(--line);padding-top:16px}
 .send-summary b{font-family:var(--mono);font-weight:700;color:var(--text)}
 .primary-button{display:block;text-align:center;border:0;border-radius:var(--r-md);background:var(--accent);color:white;padding:12px 16px;font-family:var(--mono);font-size:var(--fs-md);font-weight:700;width:100%;cursor:pointer}
@@ -236,8 +241,6 @@ input.override-input{grid-column:3;grid-row:2;width:90px;font-family:var(--mono)
   .admin-head>span:last-child{width:92px}
   .modal-actions{flex-direction:column}
   .f-points input{width:105px}
-  .preset-actions{flex-wrap:wrap}
-  .preset-actions input{flex-basis:100%}
   .brand{font-size:16px;gap:8px}
   .brand-logo{width:30px;height:30px}
 }
