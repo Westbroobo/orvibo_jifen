@@ -8,6 +8,7 @@ import CardPreview from './components/CardPreview.vue'
 import EmployeeAvatar from './components/EmployeeAvatar.vue'
 import DirectorySync from './components/DirectorySync.vue'
 
+const logoUrl = '/logo.svg'
 const user = ref<User | null>(null)
 const ready = ref(false)
 const redirectingToFeishu = ref(false)
@@ -301,7 +302,7 @@ async function confirmRecall() {
 <template>
   <div class="page">
     <header class="topbar">
-      <a class="brand" href="/"><img class="brand-logo" src="/logo.svg" alt="" width="36" height="36"><span>ORVIBO_员工积分系统</span></a>
+      <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="36" height="36"><span>ORVIBO_员工积分系统</span></a>
       <div v-if="user" class="topbar-right">
         <div class="account-panel" aria-label="当前账号">
           <div class="account-identity">
@@ -324,7 +325,6 @@ async function confirmRecall() {
         <section class="panel" aria-label="积分操作">
           <form class="op-form" @submit.prevent="makePreview"><fieldset class="op-form-body" :disabled="busy">
             <div class="form-section">
-              <div class="section-title"><span class="prompt">&gt;</span> 记分</div>
               <PeoplePicker v-model="targets" :people="directory.people" :departments="directory.departments" title="记分对象" allow-all autofocus />
               <div><div class="field-label"><span class="prompt">&gt;</span> 操作类型</div><div class="f-seg"><button type="button" class="opt plus" :class="{ active: operation === 'plus' }" @click="operation = 'plus'">＋ 加分</button><button type="button" class="opt minus" :class="{ active: operation === 'minus' }" @click="operation = 'minus'">－ 扣分</button></div></div>
               <div><label class="field-label" for="points"><span class="prompt">&gt;</span> 每人分值</label><div class="f-points"><span :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ operation === 'plus' ? '+' : '−' }}</span><input id="points" v-model.number="points" type="number" min="1" step="1" :class="operation === 'plus' ? 'plus-text' : 'minus-text'"><span class="unit">分</span><div class="stepper"><button type="button" aria-label="减少分值" @click="stepPoints(-1, $event)">−</button><button type="button" aria-label="增加分值" @click="stepPoints(1, $event)">＋</button></div></div><div class="point-quick"><button v-for="value in pointQuick" :key="value" type="button" :class="{ active: points === value }" @click="points = value">{{ value }}</button></div></div>
@@ -348,7 +348,7 @@ async function confirmRecall() {
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
           <select v-if="(preview?.rows.length ?? selectedPeople.length) > 1" v-model.number="previewIndex" aria-label="切换卡片预览人员"><option v-for="(person, index) in (preview ? preview.rows.map(r => r.person) : selectedPeople)" :key="person.id" :value="index">{{ person.name }}</option></select>
-          <CardPreview v-if="activeRow" :context="activeRow.context" :variables="activeRow.card.data.template_variable" :avatar-url="activeRow.person.avatar_url" /><CardPreview v-else-if="draftContext" :context="draftContext" :avatar-url="draftPerson?.avatar_url" /><div v-else class="empty-preview"><img class="empty-preview-logo" src="/logo.svg" alt="" width="36" height="36"><p>请选择记分对象</p></div>
+          <CardPreview v-if="activeRow" :context="activeRow.context" :variables="activeRow.card.data.template_variable" :avatar-url="activeRow.person.avatar_url" /><CardPreview v-else-if="draftContext" :context="draftContext" :avatar-url="draftPerson?.avatar_url" /><div v-else class="empty-preview"><img class="empty-preview-logo" :src="logoUrl" alt="" width="36" height="36"><p>请选择记分对象</p></div>
           <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button type="button" class="primary-button preview-send" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button></template>
         </aside>
         <div class="mobile-actions">
