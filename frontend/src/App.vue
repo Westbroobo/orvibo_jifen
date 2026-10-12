@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
 import { emptySelection, unionSelection, recallLabels, statusLabels } from './types'
 import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
-import PeoplePicker from './components/PeoplePicker.vue'
+import PersonMultiSelect from './components/PersonMultiSelect.vue'
 import CardPreview from './components/CardPreview.vue'
 import EmployeeAvatar from './components/EmployeeAvatar.vue'
 import DirectorySync from './components/DirectorySync.vue'
@@ -19,25 +19,14 @@ const page = ref<'console' | 'lists' | 'history' | 'admin'>('console')
 const directory = ref<Directory>({ people: [], departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false })
 const totals = ref<Record<string, number>>({})
 const month = ref('')
-const targets = ref(emptySelection())
+const targets = ref<string[]>([])
 const recipients = ref(unionSelection())
 const operation = ref<'plus' | 'minus'>('plus')
 const points = ref(5)
 const reason = ref('')
-const pointQuick = [1, 2, 5, 10, 20]
-function stepPoints(step: number, event: MouseEvent) { points.value = Math.max(1, points.value + (event.shiftKey ? 5 : 1) * step) }
-function loadRecentReasons(): string[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem('recentReasons') ?? '[]')
-    return Array.isArray(raw) ? raw.filter((item: unknown): item is string => typeof item === 'string').slice(0, 5) : []
-  } catch { return [] }
-}
-const recentReasons = ref<string[]>(loadRecentReasons())
-function rememberReason(value: string) {
-  const trimmed = value.trim()
-  if (!trimmed) return
-  recentReasons.value = [trimmed, ...recentReasons.value.filter(item => item !== trimmed)].slice(0, 5)
-  try { localStorage.setItem('recentReasons', JSON.stringify(recentReasons.value)) } catch { /* 存储不可用时静默 */ }
+function stepPoints(step: number) {
+  const current = Number.isInteger(points.value) ? points.value : 0
+  points.value = Math.min(2_000_000_000, Math.max(1, current + step))
 }
 const manual = ref<Record<string, boolean>>({})
 const mirrorRecipients = ref(false)
@@ -79,19 +68,12 @@ let detailSequence = 0
 
 const authorized = computed(() => user.value?.status === 'active' && user.value.role !== 'none')
 const delta = computed(() => operation.value === 'plus' ? points.value : -points.value)
-const targetIds = computed(() => {
-  const ids = new Set<string>()
-  const hasLevels = targets.value.levels.some(l => l.length)
-  for (const p of directory.value.people) {
-    if (p.status !== 'active') continue
-    const matchesPath = !hasLevels || p.paths.some(path => targets.value.levels.every((idsAt, i) => !idsAt.length || idsAt.includes(path.ids[i] ?? '')))
-    if (targets.value.mode === 'all') { if (hasLevels && matchesPath) ids.add(p.id) }
-    else if (targets.value.person_ids.includes(p.id) && matchesPath) ids.add(p.id)
-  }
-  targets.value.extra_ids.forEach(id => ids.add(id))
-  return [...ids]
-})
+const targetIds = computed(() => [...new Set(targets.value)])
 const selectedPeople = computed(() => directory.value.people.filter(p => targetIds.value.includes(p.id)))
+const targetWarnings = computed(() => targetIds.value.flatMap(id => {
+  const person = directory.value.people.find(p => p.id === id)
+  return person?.status === 'active' ? [] : [`${person?.name ?? '已选人员'}当前不可用，请移除后重新选择。`]
+}))
 const displayAdminPeople = computed(() => directory.value.people.filter(p => p.name.includes(adminQuery.value.trim())))
 const validPreview = computed(() => preview.value && new Date(preview.value.expires_at).getTime() > clock.value)
 const activeRow = computed(() => preview.value?.rows[previewIndex.value] ?? preview.value?.rows[0])
@@ -209,6 +191,7 @@ onMounted(async () => {
 const submitHint = computed(() => {
   if (busy.value) return '正在处理…'
   if (!selectedPeople.value.length) return '请先选择记分对象'
+  if (targetWarnings.value.length) return '请移除不可用的加减分对象'
   if (!reason.value.trim()) return '请填写原因'
   if (recipientWarnings.value.length) return '通知范围存在冲突,请先处理'
   if (recipientsResolving.value) return '正在解析通知范围…'
@@ -229,8 +212,8 @@ function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
 function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
 onUnmounted(() => { window.removeEventListener('keydown', onKeydown); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
 let previewTimer: ReturnType<typeof setTimeout> | undefined
-const previewReady = computed(() => !busy.value && !recipientsResolving.value && selectedPeople.value.length > 0 && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
-watch([targets, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings, recipientsResolving], () => {
+const previewReady = computed(() => !busy.value && !recipientsResolving.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
+watch([targets, targetWarnings, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings, recipientsResolving], () => {
   clearTimeout(previewTimer)
   preview.value = null; confirmation.value = false; idempotency.value = ''
   if (!previewReady.value) return
@@ -246,8 +229,8 @@ watch([recipients, directory], () => {
     finally { if (sequence === resolveSequence) recipientsResolving.value = false }
   }, 150)
 }, { deep: true })
-watch([targets, mirrorRecipients], () => {
-  if (mirrorRecipients.value) { presetId.value = ''; recipients.value = JSON.parse(JSON.stringify(targets.value)) }
+watch([targetIds, mirrorRecipients], () => {
+  if (mirrorRecipients.value) { presetId.value = ''; recipients.value = { ...emptySelection(), person_ids: [...targetIds.value] } }
 }, { deep: true })
 
 function toggleManual(person: Person, checked: boolean) {
@@ -256,7 +239,7 @@ function toggleManual(person: Person, checked: boolean) {
 }
 async function makePreview() {
   if (busy.value) return
-  if (recipientsResolving.value || !selectedPeople.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
+  if (recipientsResolving.value || !selectedPeople.value.length || targetWarnings.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
   await action(async () => {
     if (!Number.isInteger(points.value) || points.value <= 0) throw new Error('请输入正整数分值')
     const values: Record<string, number> = {}
@@ -269,7 +252,7 @@ async function commit() {
   if (!preview.value || !validPreview.value) return
   await action(async () => {
     const result = await api<{ id: string }>('/adjustments', 'POST', { preview_token: preview.value!.preview_token, idempotency_key: idempotency.value })
-    confirmation.value = false; preview.value = null; targets.value = emptySelection(); manual.value = {}; overrides.value = {}; rememberReason(reason.value); reason.value = ''
+    confirmation.value = false; preview.value = null; targets.value = []; manual.value = {}; overrides.value = {}; reason.value = ''
     await loadDetail(result.id); await refresh(); notice.value = '积分已记账，通知正在发送。'
   })
 }
@@ -358,10 +341,21 @@ async function confirmRecall() {
         <section class="panel" aria-label="积分操作">
           <form class="op-form" @submit.prevent="makePreview"><fieldset class="op-form-body" :disabled="busy">
             <div class="form-section">
-              <PeoplePicker v-model="targets" :people="directory.people" :departments="directory.departments" title="记分对象" allow-all autofocus />
+              <PersonMultiSelect v-model="targets" :people="directory.people" />
+              <p v-for="warning in targetWarnings" :key="warning" class="error-text">{{ warning }}</p>
               <div><div class="field-label"><span class="prompt">&gt;</span> 操作类型</div><div class="f-seg"><button type="button" class="opt plus" :class="{ active: operation === 'plus' }" @click="operation = 'plus'">＋ 加分</button><button type="button" class="opt minus" :class="{ active: operation === 'minus' }" @click="operation = 'minus'">－ 扣分</button></div></div>
-              <div><label class="field-label" for="points"><span class="prompt">&gt;</span> 每人分值</label><div class="f-points"><span :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ operation === 'plus' ? '+' : '−' }}</span><input id="points" v-model.number="points" type="number" min="1" step="1" :class="operation === 'plus' ? 'plus-text' : 'minus-text'"><span class="unit">分</span><div class="stepper"><button type="button" aria-label="减少分值" @click="stepPoints(-1, $event)">−</button><button type="button" aria-label="增加分值" @click="stepPoints(1, $event)">＋</button></div></div><div class="point-quick"><button v-for="value in pointQuick" :key="value" type="button" :class="{ active: points === value }" @click="points = value">{{ value }}</button></div></div>
-              <div><label class="field-label" for="reason"><span class="prompt">&gt;</span> 原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea><div v-if="recentReasons.length" class="reason-quick"><button v-for="item in recentReasons" :key="item" type="button" :title="item" @click="reason = item">{{ item }}</button></div></div>
+              <div class="points-control" role="group" aria-label="调整分值">
+                <button class="points-jump decrease" type="button" aria-label="分值减少 5" :disabled="points <= 1" @click="stepPoints(-5)">−5</button>
+                <div class="points-field">
+                  <input id="points" v-model.number="points" aria-label="加减分值" type="number" min="1" max="2000000000" step="1">
+                  <div class="points-arrows">
+                    <button type="button" aria-label="分值增加 1" :disabled="points >= 2000000000" @click="stepPoints(1)"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 10 4-4 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+                    <button type="button" aria-label="分值减少 1" :disabled="points <= 1" @click="stepPoints(-1)"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+                  </div>
+                </div>
+                <button class="points-jump increase" type="button" aria-label="分值增加 5" :disabled="points >= 2000000000" @click="stepPoints(5)">+5</button>
+              </div>
+              <div><label class="field-label" for="reason"><span class="prompt">&gt;</span> 原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea></div>
               <div v-if="selectedPeople.length"><div class="field-label"><span class="prompt">&gt;</span> 最终总分</div><div v-for="person in selectedPeople" :key="person.id" class="balance-row" role="group" :aria-label="`${person.name}总分`"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><span class="balance-line">{{ totals[person.id] ?? 60 }} → <b :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ manual[person.id] ? overrides[person.id] : (totals[person.id] ?? 60) + delta }}</b></span></div><label class="manual-toggle"><input type="checkbox" :checked="manual[person.id] ?? false" @change="toggleManual(person, ($event.target as HTMLInputElement).checked)">手动总分</label><input v-if="manual[person.id]" v-model.number="overrides[person.id]" class="override-input" type="number" step="1" :aria-label="`${person.name}最终总分`"></div><p v-if="selectedPeople.some(person => manual[person.id])" class="hint">手动总分已包含本次加减。</p></div>
             </div>
             <div class="form-section">
@@ -373,7 +367,7 @@ async function confirmRecall() {
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
-            <button class="primary-button form-submit" :class="{ busy }" type="submit" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length">{{ busy ? '正在处理…' : '更新预览' }}</button>
+            <button class="primary-button form-submit" :class="{ busy }" type="submit" :disabled="!previewReady">{{ busy ? '正在处理…' : '更新预览' }}</button>
             <p v-if="submitHint" class="hint submit-hint" aria-live="polite">{{ submitHint }}</p>
           </fieldset></form>
         </section>
@@ -383,7 +377,7 @@ async function confirmRecall() {
           <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button type="button" class="primary-button preview-send" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button></template>
         </aside>
         <div class="mobile-actions">
-          <button v-if="!preview" type="button" :disabled="busy || !selectedPeople.length || !reason.trim() || !resolvedRecipients.length || !!recipientWarnings.length" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
+          <button v-if="!preview" type="button" :disabled="!previewReady" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
           <button v-else class="primary-button" type="button" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button>
         </div>
       </main>

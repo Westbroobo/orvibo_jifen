@@ -24,7 +24,7 @@ fieldset:disabled{opacity:.7}
 button,.person-option,.chip,.opt,.navigation button{transition:background-color .12s,border-color .12s,color .12s}
 button:active:not(:disabled){transform:translateY(1px)}
 .primary-button:active:not(:disabled){background:var(--accent-deep)}
-.opt,.f-points input,.balance-line b,.signed-number{transition:color .15s}
+.opt,.balance-line b,.signed-number{transition:color .15s}
 
 /* ========== 布局骨架 ========== */
 .page{max-width:1140px;margin:auto;padding:0 24px 48px}
@@ -64,12 +64,22 @@ button:active:not(:disabled){transform:translateY(1px)}
 .opt.minus.active{background:var(--minus-soft);border-color:var(--minus);color:var(--minus-ink)}
 .plus-text{color:var(--plus-ink)}
 .minus-text{color:var(--minus-ink)}
-.f-points{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:32px}
-.f-points input{border:0;background:transparent;padding:0;font-size:36px;width:135px;font-family:var(--mono);font-weight:700}
-.f-points input::-webkit-inner-spin-button{appearance:none}
-.unit{font-size:var(--fs-md);color:var(--muted)}
-.stepper{display:flex;gap:8px;margin-left:auto}
-.stepper button{height:36px;width:36px;padding:0;font-size:16px}
+.points-control{display:flex;align-items:center;gap:16px}
+.points-jump{flex:none;width:40px;height:40px;padding:0;border:0;border-radius:50%;color:white;font-family:var(--sans);font-size:var(--fs-md);font-weight:700}
+.points-jump.decrease{background:var(--minus)}
+.points-jump.increase{background:var(--plus)}
+.points-jump.decrease:hover:not(:disabled){background:var(--minus-ink)}
+.points-jump.increase:hover:not(:disabled){background:var(--plus-ink)}
+.points-field{display:flex;flex:1;min-width:0;height:46px;border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:var(--surface)}
+.points-field:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.points-field input{flex:1;border:0;border-radius:0;padding:8px 12px;text-align:center;background:transparent;font-family:var(--mono);font-size:var(--fs-md);appearance:textfield;-moz-appearance:textfield}
+.points-field input:focus-visible{outline:none}
+.points-field input::-webkit-inner-spin-button,.points-field input::-webkit-outer-spin-button{appearance:none;margin:0}
+.points-arrows{display:flex;flex:none;flex-direction:column;width:38px;border-left:1px solid var(--line);background:var(--surface-2)}
+.points-arrows button{display:flex;align-items:center;justify-content:center;flex:1;min-height:0;padding:0;border:0;border-radius:0;background:transparent;color:var(--muted)}
+.points-arrows button+button{border-top:1px solid var(--line)}
+.points-arrows button:hover:not(:disabled){background:var(--accent-soft);color:var(--accent-deep)}
+.points-arrows button:focus-visible{outline-offset:-3px}
 .balance-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding:8px 0;font-size:var(--fs-sm)}
 .balance-row>div{min-width:0}
 .balance-line{margin-left:12px;color:var(--muted);font-family:var(--mono);font-size:var(--fs-sm)}
@@ -95,12 +105,6 @@ input.override-input{grid-column:3;grid-row:2;width:90px;font-family:var(--mono)
 .preview-details details{margin:8px 0}
 .preview-details small{font-family:var(--mono)}
 .mirror-toggle{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm)}
-.point-quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.point-quick button{flex:none;padding:4px 8px;min-height:28px;font-size:var(--fs-sm)}
-.point-quick button.active{border-color:var(--accent);color:var(--accent-deep);background:var(--accent-soft)}
-.reason-quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.reason-quick button{flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 8px;min-height:28px;font-size:var(--fs-xs);font-family:var(--sans);background:var(--surface-2)}
-.reason-quick button:hover:not(:disabled){border-color:var(--accent)}
 
 /* ========== 发送记录 ========== */
 .empty-state{padding:56px 0;text-align:center;color:var(--muted);font-size:var(--fs-md)}
@@ -240,7 +244,7 @@ input.override-input{grid-column:3;grid-row:2;width:90px;font-family:var(--mono)
   .admin-head{gap:8px;padding-left:36px}
   .admin-head>span:last-child{width:92px}
   .modal-actions{flex-direction:column}
-  .f-points input{width:105px}
+  .points-control{gap:12px}
   .brand{font-size:16px;gap:8px}
   .brand-logo{width:30px;height:30px}
 }
