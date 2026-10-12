@@ -36,6 +36,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 .navigation button{border-color:transparent;background:transparent;padding:8px 16px;color:var(--muted)}
 .navigation button.active{background:var(--surface-2);border-color:var(--line);color:var(--text)}
 .navigation>span{margin-left:auto;color:var(--muted);font-size:var(--fs-xs)}
+.page-loading{margin:-12px 0 16px;font-size:var(--fs-sm);color:var(--muted)}
 .layout{display:grid;grid-template-columns:1.1fr .9fr;gap:24px;align-items:start}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:24px;min-width:0}
 .panel-head{margin-bottom:24px}
@@ -56,6 +57,10 @@ button:active:not(:disabled){transform:translateY(1px)}
 .field-label{display:block;font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);margin-bottom:8px;letter-spacing:.02em}
 .field-label .prompt{margin-right:4px}
 .field-label small{margin-left:4px}
+.op-form .field-label{font-family:var(--sans);font-size:14px;font-weight:600;line-height:1.5;color:var(--text);letter-spacing:0;margin-bottom:10px}
+.op-form .field-label small,.op-form .field-label .count{font-size:var(--fs-xs);font-weight:400;color:var(--muted)}
+.op-form .recipient-heading .field-label{margin:0}
+.op-form .recipient-section{border-top:1px solid var(--line);padding-top:24px}
 .count{float:right;font-family:var(--sans);letter-spacing:0}
 .prompt{color:var(--accent)}
 .f-seg{display:flex;gap:8px}

@@ -31,9 +31,9 @@ onUnmounted(() => document.removeEventListener('pointerdown', outside))
 
 <template>
   <div ref="root" class="person-select" role="group" aria-label="加减分对象" @focusout="closeOnBlur" @keydown.esc.prevent.stop="open = false">
-    <div class="field-label"><span class="prompt">&gt;</span> 加减分对象 <span class="count">已选 {{ selectedIds.size }} 人</span></div>
+    <label class="field-label" for="target-person-search">加减分对象 <span class="count">已选 {{ selectedIds.size }} 人</span></label>
     <div class="search-wrap">
-      <input v-model="query" type="search" aria-label="加减分对象姓名搜索" placeholder="搜索姓名，可选多人" :aria-expanded="open" aria-controls="target-person-options" autocomplete="off" @focus="open = true" @input="page = 1; open = true" @keydown.down.prevent="open = true">
+      <input id="target-person-search" v-model="query" type="search" aria-label="加减分对象姓名搜索" placeholder="搜索姓名，可选多人" :aria-expanded="open" aria-controls="target-person-options" autocomplete="off" @focus="open = true" @input="page = 1; open = true" @keydown.down.prevent="open = true">
       <div v-if="open" id="target-person-options" class="person-options" role="group" aria-label="候选人员">
         <div class="option-list">
           <label v-for="person in visible" :key="person.id" class="person-option" :class="{ selected: selectedIds.has(person.id) }">

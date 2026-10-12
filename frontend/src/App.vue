@@ -36,6 +36,7 @@ const previewIndex = ref(0)
 const confirmation = ref(false)
 const idempotency = ref('')
 const busy = ref(false)
+const loadingPage = ref(false)
 const error = ref('')
 const notice = ref('')
 const presets = ref<Preset[]>([])
@@ -65,6 +66,16 @@ let timer: ReturnType<typeof setInterval> | undefined
 let resolveTimer: ReturnType<typeof setTimeout> | undefined
 let resolveSequence = 0
 let detailSequence = 0
+let historySequence = 0
+let pageRequest: AbortController | undefined
+
+function cancelPageLoad() {
+  pageRequest?.abort()
+  pageRequest = undefined
+  loadingPage.value = false
+  ++historySequence
+  loadingHistory.value = false
+}
 
 const authorized = computed(() => user.value?.status === 'active' && user.value.role !== 'none')
 const delta = computed(() => operation.value === 'plus' ? points.value : -points.value)
@@ -113,6 +124,7 @@ const historyStatusParts = (item: HistoryItem) => {
 
 async function action(fn: () => Promise<void>) {
   if (busy.value) return
+  cancelPageLoad()
   busy.value = true; error.value = ''; notice.value = ''
   try { await fn() } catch (e) { error.value = e instanceof Error ? e.message : '操作失败' } finally { busy.value = false }
 }
@@ -142,8 +154,9 @@ watch(rangeDialog, async (value) => {
   if (value) { captureOpener(); await nextTick(); rangeClose.value?.focus() }
   else { await nextTick(); restoreOpener() }
 })
-async function refresh() {
-  const [data, balances, configs] = await Promise.all([api<Directory>('/directory'), api<Balances>('/balances'), api<Preset[]>('/presets')])
+async function refresh(signal?: AbortSignal) {
+  const [data, balances, configs] = await Promise.all([api<Directory>('/directory', 'GET', undefined, signal), api<Balances>('/balances', 'GET', undefined, signal), api<Preset[]>('/presets', 'GET', undefined, signal)])
+  if (signal?.aborted) return
   directory.value = data; applyBalances(balances); presets.value = configs
   if (presetId.value && !mirrorRecipients.value) {
     if (!configs.some(p => p.id === presetId.value)) { presetId.value = ''; notice.value = '原发送名单已删除，请重新选择。' }
@@ -184,12 +197,13 @@ onMounted(async () => {
     clock.value = Date.now()
     if (!busy.value && !recallConfirmation.value) {
       if (detail.value && (detail.value.statuses.pending || detail.value.statuses.sending || detail.value.recall_statuses?.pending || detail.value.recall_statuses?.recalling)) void loadDetail(detail.value.id, detail.value.page, true).catch(() => {})
-      if (page.value === 'history' && history.value.some(item => item.recall_statuses?.pending || item.recall_statuses?.recalling)) void loadHistory().catch(() => {})
+      if (page.value === 'history' && !loadingHistory.value && history.value.some(item => item.recall_statuses?.pending || item.recall_statuses?.recalling)) void loadHistory().catch(() => {})
     }
   }, 3000)
 })
 const submitHint = computed(() => {
   if (busy.value) return '正在处理…'
+  if (loadingPage.value) return '正在加载…'
   if (!selectedPeople.value.length) return '请先选择记分对象'
   if (targetWarnings.value.length) return '请移除不可用的加减分对象'
   if (!reason.value.trim()) return '请填写原因'
@@ -210,9 +224,9 @@ watch(notice, async (value) => {
 })
 function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
 function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
-onUnmounted(() => { window.removeEventListener('keydown', onKeydown); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
+onUnmounted(() => { cancelPageLoad(); window.removeEventListener('keydown', onKeydown); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
 let previewTimer: ReturnType<typeof setTimeout> | undefined
-const previewReady = computed(() => !busy.value && !recipientsResolving.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
+const previewReady = computed(() => page.value === 'console' && !busy.value && !loadingPage.value && !recipientsResolving.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
 watch([targets, targetWarnings, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings, recipientsResolving], () => {
   clearTimeout(previewTimer)
   preview.value = null; confirmation.value = false; idempotency.value = ''
@@ -238,7 +252,7 @@ function toggleManual(person: Person, checked: boolean) {
   if (checked) overrides.value[person.id] = (totals.value[person.id] ?? 60) + delta.value
 }
 async function makePreview() {
-  if (busy.value) return
+  if (busy.value || loadingPage.value || page.value !== 'console') return
   if (recipientsResolving.value || !selectedPeople.value.length || targetWarnings.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
   await action(async () => {
     if (!Number.isInteger(points.value) || points.value <= 0) throw new Error('请输入正整数分值')
@@ -277,13 +291,15 @@ function applyRange() {
   mirrorRecipients.value = false; presetId.value = ''; recipients.value = JSON.parse(JSON.stringify(rangeDraft.value)); rangeDialog.value = false
 }
 function clearRecipientRange() { mirrorRecipients.value = false; presetId.value = ''; recipients.value = unionSelection() }
-async function loadHistory() {
+async function loadHistory(signal?: AbortSignal) {
+  const sequence = ++historySequence
   loadingHistory.value = true
   try {
-    const result = await api<{ items: HistoryItem[]; total: number }>('/adjustments?page=' + historyPage.value)
-    const balances = await api<Balances>('/balances')
+    const result = await api<{ items: HistoryItem[]; total: number }>('/adjustments?page=' + historyPage.value, 'GET', undefined, signal)
+    const balances = await api<Balances>('/balances', 'GET', undefined, signal)
+    if (signal?.aborted || sequence !== historySequence) return
     history.value = result.items; historyTotal.value = result.total; applyBalances(balances)
-  } finally { loadingHistory.value = false }
+  } finally { if (sequence === historySequence) loadingHistory.value = false }
 }
 async function loadDetail(id: string, selectedPage = 1, polling = false) {
   const sequence = ++detailSequence
@@ -293,7 +309,22 @@ async function loadDetail(id: string, selectedPage = 1, polling = false) {
   detail.value = result; applyBalances(balances)
 }
 function closeDetail() { ++detailSequence; detail.value = null }
-async function switchPage(value: typeof page.value) { page.value = value; await action(async () => { if (value === 'history') await loadHistory(); else await refresh() }) }
+async function switchPage(value: typeof page.value) {
+  if (busy.value) return
+  cancelPageLoad()
+  clearTimeout(previewTimer)
+  page.value = value; error.value = ''; notice.value = ''
+  const request = new AbortController()
+  pageRequest = request; loadingPage.value = true
+  try {
+    if (value === 'history') await loadHistory(request.signal)
+    else await refresh(request.signal)
+  } catch (e) {
+    if (!request.signal.aborted) { error.value = e instanceof Error ? e.message : '加载失败'; request.abort() }
+  } finally {
+    if (pageRequest === request) { pageRequest = undefined; loadingPage.value = false }
+  }
+}
 async function updateRole(person: Person, event: Event) { const role = (event.target as HTMLSelectElement).value; await action(async () => { await api(`/admin/people/${person.id}/role`, 'PUT', { role }); user.value = await api<User>('/auth/me'); if (authorized.value) await refresh(); notice.value = '权限已更新。' }); if (error.value) (event.target as HTMLSelectElement).value = person.role }
 async function logout() { await action(async () => { await api('/auth/logout', 'POST'); user.value = null; closeDetail(); preview.value = null; setCsrf('') }) }
 async function retry(id: string) { await action(async () => { await api(`/deliveries/${id}/retry`, 'POST'); await loadDetail(detail.value!.id, detail.value!.page) }) }
@@ -337,13 +368,14 @@ async function confirmRecall() {
     <section v-else-if="!authorized" class="panel login-panel"><h1>当前账号暂无操作权限</h1><p>请联系管理员分配积分操作权限。{{ user.status === 'unknown' ? '人员目录尚待同步核实。' : '' }}</p><button type="button" :disabled="busy" @click="action(initialize)">重新检查权限</button></section>
     <template v-else>
       <nav class="navigation" aria-label="功能导航"><button type="button" :class="{ active: page === 'console' }" :disabled="busy" @click="switchPage('console')">操作台</button><button type="button" :class="{ active: page === 'lists' }" :disabled="busy" @click="switchPage('lists')">发送名单</button><button type="button" :class="{ active: page === 'history' }" :disabled="busy" @click="switchPage('history')">发送记录</button><button v-if="user.role === 'admin'" type="button" :class="{ active: page === 'admin' }" :disabled="busy" @click="switchPage('admin')">权限管理</button><span>{{ month }}</span></nav>
+      <p v-if="loadingPage" class="page-loading" role="status">正在加载…</p>
       <main v-if="page === 'console'" class="layout">
         <section class="panel" aria-label="积分操作">
-          <form class="op-form" @submit.prevent="makePreview"><fieldset class="op-form-body" :disabled="busy">
+          <form class="op-form" @submit.prevent="makePreview"><fieldset class="op-form-body" :disabled="busy || loadingPage">
             <div class="form-section">
               <PersonMultiSelect v-model="targets" :people="directory.people" />
               <p v-for="warning in targetWarnings" :key="warning" class="error-text">{{ warning }}</p>
-              <div><div class="field-label"><span class="prompt">&gt;</span> 操作类型</div><div class="f-seg"><button type="button" class="opt plus" :class="{ active: operation === 'plus' }" @click="operation = 'plus'">＋ 加分</button><button type="button" class="opt minus" :class="{ active: operation === 'minus' }" @click="operation = 'minus'">－ 扣分</button></div></div>
+              <div><div class="field-label">操作类型</div><div class="f-seg"><button type="button" class="opt plus" :class="{ active: operation === 'plus' }" @click="operation = 'plus'">＋ 加分</button><button type="button" class="opt minus" :class="{ active: operation === 'minus' }" @click="operation = 'minus'">－ 扣分</button></div></div>
               <div class="points-control" role="group" aria-label="调整分值">
                 <button class="points-jump decrease" type="button" aria-label="分值减少 5" :disabled="points <= 1" @click="stepPoints(-5)">−5</button>
                 <div class="points-field">
@@ -355,11 +387,11 @@ async function confirmRecall() {
                 </div>
                 <button class="points-jump increase" type="button" aria-label="分值增加 5" :disabled="points >= 2000000000" @click="stepPoints(5)">+5</button>
               </div>
-              <div><label class="field-label" for="reason"><span class="prompt">&gt;</span> 原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea></div>
-              <div v-if="selectedPeople.length"><div class="field-label"><span class="prompt">&gt;</span> 最终总分</div><div v-for="person in selectedPeople" :key="person.id" class="balance-row" role="group" :aria-label="`${person.name}总分`"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><span class="balance-line">{{ totals[person.id] ?? 60 }} → <b :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ manual[person.id] ? overrides[person.id] : (totals[person.id] ?? 60) + delta }}</b></span></div><label class="manual-toggle"><input type="checkbox" :checked="manual[person.id] ?? false" @change="toggleManual(person, ($event.target as HTMLInputElement).checked)">手动总分</label><input v-if="manual[person.id]" v-model.number="overrides[person.id]" class="override-input" type="number" step="1" :aria-label="`${person.name}最终总分`"></div><p v-if="selectedPeople.some(person => manual[person.id])" class="hint">手动总分已包含本次加减。</p></div>
+              <div><label class="field-label" for="reason">原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea></div>
+              <div v-if="selectedPeople.length"><div class="field-label">最终总分</div><div v-for="person in selectedPeople" :key="person.id" class="balance-row" role="group" :aria-label="`${person.name}总分`"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><span class="balance-line">{{ totals[person.id] ?? 60 }} → <b :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ manual[person.id] ? overrides[person.id] : (totals[person.id] ?? 60) + delta }}</b></span></div><label class="manual-toggle"><input type="checkbox" :checked="manual[person.id] ?? false" @change="toggleManual(person, ($event.target as HTMLInputElement).checked)">手动总分</label><input v-if="manual[person.id]" v-model.number="overrides[person.id]" class="override-input" type="number" step="1" :aria-label="`${person.name}最终总分`"></div><p v-if="selectedPeople.some(person => manual[person.id])" class="hint">手动总分已包含本次加减。</p></div>
             </div>
-            <div class="form-section">
-              <div class="recipient-heading"><label class="field-label" for="recipient-preset"><span class="prompt">&gt;</span> 发送名单</label><button type="button" class="text-link" @click="switchPage('lists')">维护名单</button></div>
+            <div class="form-section recipient-section">
+              <div class="recipient-heading"><label class="field-label" for="recipient-preset">发送名单</label><button type="button" class="text-link" @click="switchPage('lists')">维护名单</button></div>
               <select id="recipient-preset" v-model="presetId" aria-label="选择发送名单" :disabled="mirrorRecipients" @change="loadPreset"><option value="">临时范围</option><optgroup v-if="publicPresets.length" label="公共名单"><option v-for="preset in publicPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup><optgroup v-if="personalPresets.length" label="我的名单"><option v-for="preset in personalPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup></select>
               <label class="mirror-toggle"><input type="checkbox" v-model="mirrorRecipients">通知范围同记分对象</label>
               <div class="recipient-toolbar"><span>{{ recipientsResolving ? '正在匹配…' : `${resolvedRecipients.length} 位通知对象` }}</span><div v-if="!mirrorRecipients" class="recipient-range-actions"><button v-if="resolvedRecipients.length || recipientWarnings.length" type="button" class="text-link" @click="clearRecipientRange">清空</button><button type="button" @click="editRange">{{ presetId ? '临时调整' : '选择范围' }}</button></div></div>
@@ -374,16 +406,16 @@ async function confirmRecall() {
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
           <select v-if="(preview?.rows.length ?? selectedPeople.length) > 1" v-model.number="previewIndex" aria-label="切换卡片预览人员"><option v-for="(person, index) in (preview ? preview.rows.map(r => r.person) : selectedPeople)" :key="person.id" :value="index">{{ person.name }}</option></select>
           <CardPreview v-if="activeRow" :context="activeRow.context" :variables="activeRow.card.data.template_variable" :avatar-url="activeRow.person.avatar_url" /><CardPreview v-else-if="draftContext" :context="draftContext" :avatar-url="draftPerson?.avatar_url" /><div v-else class="empty-preview"><img class="empty-preview-logo" :src="logoUrl" alt="" width="36" height="36"><p>请选择记分对象</p></div>
-          <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button type="button" class="primary-button preview-send" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button></template>
+          <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button type="button" class="primary-button preview-send" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button></template>
         </aside>
         <div class="mobile-actions">
           <button v-if="!preview" type="button" :disabled="!previewReady" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
-          <button v-else class="primary-button" type="button" :disabled="busy || !validPreview" @click="confirmation = true">核对并发送</button>
+          <button v-else class="primary-button" type="button" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button>
         </div>
       </main>
-      <RecipientLists v-else-if="page === 'lists'" :presets="presets" :directory="directory" :user="user" @saved="savedPreset" @deleted="deletedPreset" />
+      <RecipientLists v-else-if="page === 'lists'" :presets="presets" :directory="directory" :user="user" :loading="loadingPage" @working="busy = $event" @saved="savedPreset" @deleted="deletedPreset" />
       <section v-else-if="page === 'history'" class="panel">
-        <div class="panel-head flex-head"><h1 class="panel-title">发送记录</h1><button type="button" :disabled="busy" @click="action(loadHistory)">刷新</button></div>
+        <div class="panel-head flex-head"><h1 class="panel-title">发送记录</h1><button type="button" :disabled="busy || loadingHistory" @click="switchPage('history')">刷新</button></div>
         <div v-if="loadingHistory" class="empty-state">加载中…</div>
         <div v-else-if="!history.length" class="empty-state">还没有操作记录。</div>
         <div v-for="item in history" :key="item.id" class="history-entry">
@@ -394,13 +426,13 @@ async function confirmRecall() {
           </button>
           <div class="history-actions"><button v-if="item.recall_available" type="button" class="recall-button" :disabled="busy" @click="askBatchRecall(item)">撤回卡片 · {{ item.recall_available }}</button><button type="button" :disabled="busy" @click="action(() => loadDetail(item.id))">查看结果</button></div>
         </div>
-        <div v-if="historyTotal > 20" class="pagination"><button type="button" :disabled="busy || historyPage <= 1" @click="historyPage--; action(loadHistory)">上一页</button><span>{{ historyPage }} / {{ Math.max(1, Math.ceil(historyTotal / 20)) }}</span><button type="button" :disabled="busy || historyPage * 20 >= historyTotal" @click="historyPage++; action(loadHistory)">下一页</button></div>
+        <div v-if="historyTotal > 20" class="pagination"><button type="button" :disabled="busy || loadingHistory || historyPage <= 1" @click="historyPage--; switchPage('history')">上一页</button><span>{{ historyPage }} / {{ Math.max(1, Math.ceil(historyTotal / 20)) }}</span><button type="button" :disabled="busy || loadingHistory || historyPage * 20 >= historyTotal" @click="historyPage++; switchPage('history')">下一页</button></div>
       </section>
-      <section v-else-if="user.role === 'admin'" class="panel"><DirectorySync :busy="busy" @synced="action(refresh)" /><input v-model="adminQuery" type="search" aria-label="权限管理搜索" placeholder="搜索姓名"><div class="admin-head"><span>姓名</span><span>状态</span><span>权限</span></div><div class="admin-table"><div v-for="person in displayAdminPeople" :key="person.id" class="admin-row"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></div><span>{{ statusLabels[person.status] }}</span><select :value="person.role" :aria-label="`${person.name}权限`" :disabled="busy || person.status !== 'active' && person.role === 'none'" @change="updateRole(person, $event)"><option value="none">未授权</option><option value="operator" :disabled="person.status !== 'active'">操作员</option><option value="admin" :disabled="person.status !== 'active'">管理员</option></select></div></div></section>
+      <section v-else-if="user.role === 'admin'" class="panel"><DirectorySync :busy="busy || loadingPage" @synced="switchPage('admin')" /><input v-model="adminQuery" type="search" aria-label="权限管理搜索" placeholder="搜索姓名"><div class="admin-head"><span>姓名</span><span>状态</span><span>权限</span></div><div class="admin-table"><div v-for="person in displayAdminPeople" :key="person.id" class="admin-row"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></div><span>{{ statusLabels[person.status] }}</span><select :value="person.role" :aria-label="`${person.name}权限`" :disabled="busy || loadingPage || person.status !== 'active' && person.role === 'none'" @change="updateRole(person, $event)"><option value="none">未授权</option><option value="operator" :disabled="person.status !== 'active'">操作员</option><option value="admin" :disabled="person.status !== 'active'">管理员</option></select></div></div></section>
     </template>
   </div>
   <Transition name="modal">
-  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p class="reason-box">{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button type="button" :disabled="busy" @click="confirmation = false">返回</button><button ref="confirmSend" type="button" class="primary-button" :class="{ busy }" :disabled="busy || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
+  <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p class="reason-box">{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button type="button" :disabled="busy" @click="confirmation = false">返回</button><button ref="confirmSend" type="button" class="primary-button" :class="{ busy }" :disabled="busy || loadingPage || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
   <Transition name="modal">
   <div v-if="detail" class="modal-backdrop" @click.self="!busy && closeDetail()">
     <section class="panel modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
