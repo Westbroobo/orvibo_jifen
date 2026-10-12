@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue'
 import type { Department, Person, Selection } from '../types'
 import EmployeeAvatar from './EmployeeAvatar.vue'
 
-const props = defineProps<{ modelValue: Selection; people: Person[]; departments: Department[]; title: string; allowAll?: boolean }>()
+const props = defineProps<{ modelValue: Selection; people: Person[]; departments: Department[]; title: string; allowAll?: boolean; autofocus?: boolean }>()
+const coarsePointer = window.matchMedia('(pointer: coarse)').matches
 const emit = defineEmits<{ 'update:modelValue': [value: Selection] }>()
 const query = ref('')
 const extraQuery = ref('')
@@ -51,13 +52,18 @@ function selectVisible() { update({ person_ids: [...new Set([...props.modelValue
 <template>
   <div class="picker" role="group" :aria-label="title">
     <div class="field-label"><span class="prompt">&gt;</span> {{ title }} <span class="count">已选 {{ chosen.length }} 人</span></div>
-    <div class="department-grid">
-      <label v-for="level in 3" :key="level">{{ ['一级部门', '二级部门', '三级部门'][level - 1] }}
-        <select multiple :aria-label="`${title}${level}级部门`" :value="modelValue.levels[level - 1]" @change="changeLevel(level - 1, $event)">
-          <option v-for="d in options(level - 1)" :key="d.id" :value="d.id">{{ d.name }}</option>
-        </select>
-      </label>
-    </div>
+    <details class="department-fold">
+      <summary>按部门筛选<small v-if="modelValue.levels.flat().length"> 已选 {{ modelValue.levels.flat().length }} 个部门</small></summary>
+      <div class="department-grid">
+        <template v-for="level in 3" :key="level">
+          <label v-if="options(level - 1).length">{{ ['一级部门', '二级部门', '三级部门'][level - 1] }}
+            <select multiple :aria-label="`${title}${level}级部门`" :value="modelValue.levels[level - 1]" @change="changeLevel(level - 1, $event)">
+              <option v-for="d in options(level - 1)" :key="d.id" :value="d.id">{{ d.name }}</option>
+            </select>
+          </label>
+        </template>
+      </div>
+    </details>
     <div v-if="modelValue.levels.some(level => level.length)" class="picker-tools"><button class="text-button" type="button" @click="update({ levels: [[], [], []] }); page = 1">清除部门</button></div>
     <div v-if="allowAll" class="inline-options">
       <label><input type="radio" :name="title" :checked="modelValue.mode === 'selected'" @change="update({ mode: 'selected' })">逐人勾选</label>
@@ -65,7 +71,7 @@ function selectVisible() { update({ person_ids: [...new Set([...props.modelValue
     </div>
     <p v-if="modelValue.mode === 'all' && !modelValue.levels.some(l => l.length)" class="hint">请选择部门</p>
     <template v-if="modelValue.mode === 'selected'">
-      <input v-model="query" type="search" :aria-label="`${title}姓名搜索`" placeholder="搜索姓名" @input="page = 1">
+      <input v-model="query" type="search" :aria-label="`${title}姓名搜索`" placeholder="搜索姓名" :autofocus="autofocus && !coarsePointer" @input="page = 1">
       <div class="people-list">
         <label v-for="person in visible" :key="person.id" class="person-option">
           <input type="checkbox" :checked="modelValue.person_ids.includes(person.id)" @change="toggle(person.id)">
@@ -86,3 +92,34 @@ function selectVisible() { update({ person_ids: [...new Set([...props.modelValue
     <button v-if="chosen.length || stale.length" class="text-button" type="button" @click="update({ person_ids: [], extra_ids: [], levels: [[], [], []], mode: 'selected' })">清空已选</button>
   </div>
 </template>
+
+<style scoped>
+.department-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.department-grid label{font-size:var(--fs-xs);color:var(--muted)}
+.department-grid select{display:block;height:89px;padding:6px;font-size:var(--fs-sm);margin-top:4px}
+.department-grid option{padding:3px 2px}
+.picker-tools{display:flex;gap:10px;justify-content:space-between;align-items:center;margin:8px 0}
+.picker-tools small{font-size:var(--fs-xs)}
+.inline-options{display:flex;gap:20px;font-size:var(--fs-sm);margin:12px 0}
+.inline-options label{display:flex;align-items:center;gap:6px}
+.people-list{max-height:210px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-md);margin-top:8px}
+.person-option{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line);font-size:var(--fs-sm)}
+.person-option:last-child{border-bottom:0}
+.person-option:hover{background:var(--surface-2)}
+.person-text{min-width:0}
+.person-text b{display:block;font-size:var(--fs-sm)}
+.person-text small{display:block;line-height:1.5;font-size:var(--fs-xs);overflow-wrap:anywhere;color:var(--muted)}
+.picker-tools .pagination{margin:0}
+.picker-tools .pagination button{padding:5px 10px}
+.extra-picker{border-top:1px solid var(--line);padding-top:8px;font-size:var(--fs-xs);color:var(--muted)}
+details input{margin-top:8px}
+.text-button{border:0;padding:0;min-height:28px;color:var(--accent-deep);background:transparent;font-size:var(--fs-xs)}
+@media(max-width:420px){
+  .department-grid{gap:4px}
+  .department-grid select{font-size:var(--fs-xs)}
+  .picker-tools .pagination{gap:4px}
+}
+.department-fold{margin-bottom:10px}
+.department-fold summary{font-family:var(--mono);font-size:var(--fs-xs);color:var(--muted);margin-bottom:8px}
+.department-fold summary small{font-size:var(--fs-xs)}
+</style>

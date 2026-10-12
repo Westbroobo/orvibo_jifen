@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <title>ORVIBO 员工积分系统</title>
-  <rect width="64" height="64" rx="14" fill="#D97757"/>
-  <path d="M44 35a16 16 0 1 1-16-16" stroke="#FCFBF7" stroke-width="6" stroke-linecap="round"/>
-  <path d="M47 10v14m-7-7h14" stroke="#FCFBF7" stroke-width="4" stroke-linecap="round"/>
+  <path d="m35 28 21 12c2 1.2 2 3 0 4L35 56c-1.9 1.1-4.1 1.1-6 0L8 44c-2-1-2-2.8 0-4l21-12c1.9-1.1 4.1-1.1 6 0Z" fill="#263B50"/>
+  <path d="M26 44h12" stroke="#EDF3F4" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="m35 8 21 12c2 1.2 2 3 0 4L35 36c-1.9 1.1-4.1 1.1-6 0L8 24c-2-1-2-2.8 0-4L29 8c1.9-1.1 4.1-1.1 6 0Z" fill="#789C9A"/>
+  <path d="M32 16v12M26 22h12" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round"/>
 </svg>

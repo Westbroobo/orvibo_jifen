@@ -7,7 +7,7 @@ from .db import Base, new_id, now_utc
 
 
 class SystemState(Base):
-    __tablename__ = "system_state"
+    __tablename__ = "orvibo_jifen_system_state"
     __table_args__ = {"comment": "系统运行状态与组织同步控制（固定单行）"}
     id: Mapped[int] = mapped_column(primary_key=True, comment="状态记录主键，固定为 1")
     directory_version: Mapped[int] = mapped_column(default=0, comment="组织架构版本号，用于同步并发校验")
@@ -27,7 +27,7 @@ class SystemState(Base):
 
 
 class Employee(Base):
-    __tablename__ = "employees"
+    __tablename__ = "orvibo_jifen_employees"
     __table_args__ = {"comment": "员工基本信息、飞书身份与操作权限"}
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="系统内部员工 ID（UUID）")
     open_id: Mapped[str] = mapped_column(String(100), unique=True, comment="员工在当前飞书应用中的 open_id，用于登录及消息发送")
@@ -41,7 +41,7 @@ class Employee(Base):
 
 
 class Department(Base):
-    __tablename__ = "departments"
+    __tablename__ = "orvibo_jifen_departments"
     __table_args__ = {"comment": "飞书部门目录及完整层级路径"}
     id: Mapped[str] = mapped_column(String(100), primary_key=True, comment="飞书部门 open_department_id")
     name: Mapped[str] = mapped_column(String(200), comment="部门名称")
@@ -52,16 +52,16 @@ class Department(Base):
 
 
 class Membership(Base):
-    __tablename__ = "memberships"
+    __tablename__ = "orvibo_jifen_memberships"
     __table_args__ = {"comment": "员工与部门的多对多归属关系"}
-    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), primary_key=True, comment="系统内部员工 ID，关联 employees.id")
-    department_id: Mapped[str] = mapped_column(ForeignKey("departments.id"), primary_key=True, comment="所属部门 ID，关联 departments.id")
+    employee_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), primary_key=True, comment="系统内部员工 ID，关联 orvibo_jifen_employees.id")
+    department_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_departments.id"), primary_key=True, comment="所属部门 ID，关联 orvibo_jifen_departments.id")
 
 
 class Preset(Base):
-    __tablename__ = "presets"
+    __tablename__ = "orvibo_jifen_presets"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="个人发送配置 ID（UUID）")
-    owner_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True, comment="配置所属员工 ID，仅本人可访问")
+    owner_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), index=True, comment="配置所属员工 ID，仅本人可访问")
     name: Mapped[str] = mapped_column(String(100), comment="配置名称，同一用户下不可重复")
     selection: Mapped[dict] = mapped_column(JSON, comment="通知范围条件：部门层级、选择模式、勾选人员及额外人员")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="配置最近更新时间（UTC）")
@@ -69,19 +69,19 @@ class Preset(Base):
 
 
 class Balance(Base):
-    __tablename__ = "balances"
+    __tablename__ = "orvibo_jifen_balances"
     __table_args__ = {"comment": "员工月度积分余额，每人每月唯一"}
-    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), primary_key=True, comment="记分员工 ID，关联 employees.id")
+    employee_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), primary_key=True, comment="记分员工 ID，关联 orvibo_jifen_employees.id")
     month: Mapped[str] = mapped_column(String(7), primary_key=True, comment="北京时间自然月，格式 YYYY-MM")
     total: Mapped[int] = mapped_column(Integer, default=60, comment="本月当前最终总分，无记录时以 60 分为起点")
     version: Mapped[int] = mapped_column(Integer, default=0, comment="余额版本号，每次记账递增，用于预览并发校验")
 
 
 class Preview(Base):
-    __tablename__ = "previews"
+    __tablename__ = "orvibo_jifen_previews"
     __table_args__ = {"comment": "积分操作预览凭据与内容快照"}
     id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="预览凭据的 SHA-256 摘要，不保存原始凭据")
-    owner_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), comment="创建预览的操作员 ID")
+    owner_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), comment="创建预览的操作员 ID")
     request: Mapped[dict] = mapped_column(JSON, comment="预览请求：记分对象、分值、原因、覆盖总分及通知范围")
     snapshot: Mapped[dict] = mapped_column(JSON, comment="预览计算结果快照，含逐人总分、余额版本、卡片及通知名单")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="预览创建时间（UTC）")
@@ -90,9 +90,9 @@ class Preview(Base):
 
 
 class Batch(Base):
-    __tablename__ = "batches"
+    __tablename__ = "orvibo_jifen_batches"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="积分操作批次 ID（UUID）")
-    operator_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True, comment="执行本次操作的员工 ID")
+    operator_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), index=True, comment="执行本次操作的员工 ID")
     idempotency_key: Mapped[str] = mapped_column(String(100), comment="客户端提交幂等键，同一操作员下唯一，防止重复记账")
     preview_id: Mapped[str] = mapped_column(String(64), unique=True, comment="所用预览凭据摘要，确保一个预览只记账一次")
     month: Mapped[str] = mapped_column(String(7), comment="北京时间记分自然月，格式 YYYY-MM")
@@ -104,10 +104,10 @@ class Batch(Base):
 
 
 class Ledger(Base):
-    __tablename__ = "ledger"
+    __tablename__ = "orvibo_jifen_ledger"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="积分流水 ID（UUID）")
-    batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True, comment="所属操作批次 ID，关联 batches.id")
-    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), comment="本条流水的记分员工 ID")
+    batch_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_batches.id"), index=True, comment="所属操作批次 ID，关联 orvibo_jifen_batches.id")
+    employee_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), comment="本条流水的记分员工 ID")
     month: Mapped[str] = mapped_column(String(7), comment="北京时间记分自然月，格式 YYYY-MM")
     delta: Mapped[int] = mapped_column(Integer, comment="本次积分变动值，正数加分，负数扣分")
     before_total: Mapped[int] = mapped_column(Integer, comment="操作前本月总分，月内首次记账为 60 分")
@@ -118,10 +118,10 @@ class Ledger(Base):
 
 
 class Delivery(Base):
-    __tablename__ = "deliveries"
+    __tablename__ = "orvibo_jifen_deliveries"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="消息投递记录 ID（UUID）")
-    ledger_id: Mapped[str] = mapped_column(ForeignKey("ledger.id"), index=True, comment="关联积分流水 ID，同一流水对同一接收人只投递一次")
-    recipient_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), comment="通知接收人的系统内部员工 ID")
+    ledger_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_ledger.id"), index=True, comment="关联积分流水 ID，同一流水对同一接收人只投递一次")
+    recipient_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), comment="通知接收人的系统内部员工 ID")
     recipient_open_id: Mapped[str] = mapped_column(String(100), comment="接收人飞书 open_id 快照，用于私聊发送")
     recipient_name: Mapped[str] = mapped_column(String(200), comment="接收人姓名快照")
     uuid: Mapped[str] = mapped_column(String(36), unique=True, default=new_id, comment="飞书消息去重 UUID，重试时保持不变")
@@ -139,10 +139,10 @@ class Delivery(Base):
 
 
 class LedgerCancellation(Base):
-    __tablename__ = "ledger_cancellations"
+    __tablename__ = "orvibo_jifen_ledger_cancellations"
     __table_args__ = {"comment": "积分流水作废审计，每笔记分至多作废一次，原流水和卡片快照保留"}
-    ledger_id: Mapped[str] = mapped_column(ForeignKey("ledger.id"), primary_key=True, comment="作废的积分流水 ID，唯一主键防止重复作废")
-    actor_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), comment="申请作废的操作员 ID；历史撤回修正沿用原撤回申请人")
+    ledger_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_ledger.id"), primary_key=True, comment="作废的积分流水 ID，唯一主键防止重复作废")
+    actor_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), comment="申请作废的操作员 ID；历史撤回修正沿用原撤回申请人")
     cancelled_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="积分作废时间（UTC）")
     before_balance: Mapped[int] = mapped_column(Integer, comment="作废前该员工该月的实际余额")
     after_balance: Mapped[int] = mapped_column(Integer, comment="作废后按其余有效流水重算的月度余额")
@@ -150,10 +150,10 @@ class LedgerCancellation(Base):
 
 
 class MessageRecall(Base):
-    __tablename__ = "message_recalls"
+    __tablename__ = "orvibo_jifen_message_recalls"
     __table_args__ = {"comment": "飞书消息撤回任务与结果，每条投递记录至多一个任务"}
-    delivery_id: Mapped[str] = mapped_column(ForeignKey("deliveries.id"), primary_key=True, comment="被撤回的投递记录 ID，关联 deliveries.id，同时作为任务主键")
-    actor_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), comment="首次申请撤回的操作员 ID")
+    delivery_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_deliveries.id"), primary_key=True, comment="被撤回的投递记录 ID，关联 orvibo_jifen_deliveries.id，同时作为任务主键")
+    actor_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), comment="首次申请撤回的操作员 ID")
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True, comment="撤回状态：pending 待撤回，recalling 撤回中，recalled 已撤回，failed 失败，review 待核实")
     requested_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="首次申请撤回时间（UTC）")
     attempts: Mapped[int] = mapped_column(Integer, default=0, comment="当前撤回重试周期的尝试次数")
@@ -167,7 +167,7 @@ class MessageRecall(Base):
 
 
 class LoginState(Base):
-    __tablename__ = "login_states"
+    __tablename__ = "orvibo_jifen_login_states"
     __table_args__ = {"comment": "飞书 OAuth 一次性登录状态与 PKCE 校验信息"}
     id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="OAuth state 的 HMAC-SHA256 摘要")
     verifier: Mapped[str] = mapped_column(String(128), comment="PKCE code_verifier，仅服务端保存，用于交换授权码")
@@ -175,27 +175,27 @@ class LoginState(Base):
 
 
 class Session(Base):
-    __tablename__ = "sessions"
+    __tablename__ = "orvibo_jifen_sessions"
     __table_args__ = {"comment": "用户登录会话与写请求 CSRF 校验信息"}
     id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="会话令牌的 HMAC-SHA256 摘要，不保存原始 Cookie 令牌")
-    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), index=True, comment="登录员工 ID，关联 employees.id")
+    employee_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), index=True, comment="登录员工 ID，关联 orvibo_jifen_employees.id")
     csrf_token: Mapped[str] = mapped_column(String(100), comment="写请求使用的 CSRF 校验令牌")
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True, comment="会话到期时间（UTC）")
 
 
 class EventReceipt(Base):
-    __tablename__ = "event_receipts"
+    __tablename__ = "orvibo_jifen_event_receipts"
     __table_args__ = {"comment": "已处理的飞书通讯录事件去重记录"}
     id: Mapped[str] = mapped_column(String(100), primary_key=True, comment="飞书事件 event_id，用于防止重复处理")
     received_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="事件首次处理时间（UTC）")
 
 
 class PermissionAudit(Base):
-    __tablename__ = "permission_audit"
+    __tablename__ = "orvibo_jifen_permission_audit"
     __table_args__ = {"comment": "员工权限变更审计记录"}
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="权限变更记录 ID（UUID）")
-    actor_id: Mapped[str | None] = mapped_column(ForeignKey("employees.id"), comment="执行变更的管理员 ID，系统初始化授权时为空")
-    employee_id: Mapped[str] = mapped_column(ForeignKey("employees.id"), comment="被变更权限的员工 ID")
+    actor_id: Mapped[str | None] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), comment="执行变更的管理员 ID，系统初始化授权时为空")
+    employee_id: Mapped[str] = mapped_column(ForeignKey("orvibo_jifen_employees.id"), comment="被变更权限的员工 ID")
     old_role: Mapped[str] = mapped_column(String(20), comment="变更前角色：admin 管理员，operator 操作员，none 未授权")
     new_role: Mapped[str] = mapped_column(String(20), comment="变更后角色：admin 管理员，operator 操作员，none 未授权")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="权限变更时间（UTC）")

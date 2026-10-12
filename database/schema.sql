@@ -330,3 +330,38 @@ SET @sync_lease_sql = IF(@sync_lease_columns = '', 'SELECT 1', CONCAT('ALTER TAB
 PREPARE sync_lease_statement FROM @sync_lease_sql;
 EXECUTE sync_lease_statement;
 DEALLOCATE PREPARE sync_lease_statement;
+
+-- =====================================================================
+-- 增量 2026-10-10（第五段）：积分系统表名统一增加 orvibo_jifen_ 前缀
+-- 先停止 API 和 worker，在同一个 SQL 会话执行本段，再启动新版服务。
+-- 尚未执行的前置增量先按顺序补齐；空数据库执行全文，最后自动改名。
+-- 仅处理以下 16 张积分系统表，保留原数据、索引、中文注释及外键关系。
+-- 已改名的表自动跳过；若目标名称已被其他表占用，整条改名语句失败。
+-- 本段可重复执行，后续增量统一使用带前缀的表名。
+-- =====================================================================
+SET NAMES utf8mb4;
+SET @jifen_prefix_previous_concat_length = @@SESSION.group_concat_max_len;
+SET SESSION group_concat_max_len = CAST(GREATEST(@jifen_prefix_previous_concat_length, 8192) AS UNSIGNED);
+SET @jifen_prefix_rename_pairs = (
+    SELECT GROUP_CONCAT(
+        CONCAT('`', TABLE_NAME, '` TO `orvibo_jifen_', TABLE_NAME, '`')
+        ORDER BY TABLE_NAME SEPARATOR ', '
+    )
+    FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'
+      AND TABLE_NAME IN (
+          'balances', 'batches', 'deliveries', 'departments', 'employees',
+          'event_receipts', 'ledger', 'ledger_cancellations', 'login_states',
+          'memberships', 'message_recalls', 'permission_audit', 'presets',
+          'previews', 'sessions', 'system_state'
+      )
+);
+SET @jifen_prefix_rename_sql = IF(
+    @jifen_prefix_rename_pairs IS NULL,
+    'SELECT ''没有需要增加前缀的积分系统表'' AS result',
+    CONCAT('RENAME TABLE ', @jifen_prefix_rename_pairs)
+);
+SET SESSION group_concat_max_len = @jifen_prefix_previous_concat_length;
+PREPARE jifen_prefix_rename_statement FROM @jifen_prefix_rename_sql;
+EXECUTE jifen_prefix_rename_statement;
+DEALLOCATE PREPARE jifen_prefix_rename_statement;
