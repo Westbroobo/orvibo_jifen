@@ -21,6 +21,12 @@ def claim_delivery(db, settings, when=None):
     )).order_by(Delivery.next_attempt_at, Delivery.id).limit(1).with_for_update())
     if not delivery:
         return None
+    ledger = db.get(Ledger, delivery.ledger_id)
+    batch = db.get(Batch, ledger.batch_id) if ledger else None
+    if not ledger or not batch:
+        delivery.status = "review"
+        delivery.last_error = "关联积分流水或操作批次缺失，请核实记录"
+        return None
     if delivery.status == "sending":
         delivery.uncertain = True
     if delivery.uncertain and delivery.first_attempt_at and when - delivery.first_attempt_at >= DEDUPE_WINDOW:
@@ -32,7 +38,7 @@ def claim_delivery(db, settings, when=None):
         delivery.last_error = "已达到自动重试次数；" + (delivery.last_error or "请查看发送结果")
         return None
     recipient = db.get(Employee, delivery.recipient_id)
-    if recipient.status != "active":
+    if not recipient or recipient.status != "active":
         delivery.status = "review" if delivery.uncertain else "failed"
         delivery.last_error = "通知对象当前不可用，未继续发送"
         return None
@@ -41,7 +47,6 @@ def claim_delivery(db, settings, when=None):
     delivery.attempts += 1
     delivery.lease_until = when + timedelta(seconds=90)
     delivery.lease_token = new_id()
-    ledger = db.get(Ledger, delivery.ledger_id)
     return {"id": delivery.id, "lease_token": delivery.lease_token,
             "recipient_open_id": delivery.recipient_open_id, "card": ledger.card, "uuid": delivery.uuid}
 
@@ -50,7 +55,7 @@ def complete_delivery(db, task, settings, *, message_id=None, error=None, when=N
     when = when or now_utc()
     lock_state(db)
     delivery = db.get(Delivery, task["id"])
-    if delivery.status != "sending" or delivery.lease_token != task["lease_token"]:
+    if not delivery or delivery.status != "sending" or delivery.lease_token != task["lease_token"]:
         return  # A stale worker must not overwrite another worker's claim.
     delivery.lease_until = None
     delivery.lease_token = None
@@ -79,12 +84,15 @@ def retry_delivery(db, delivery_id, user, when=None):
     if not delivery:
         raise HTTPException(404, "通知记录不存在")
     ledger = db.get(Ledger, delivery.ledger_id)
-    batch = db.get(Batch, ledger.batch_id)
+    batch = db.get(Batch, ledger.batch_id) if ledger else None
+    if not batch:
+        raise HTTPException(409, "关联积分流水或操作批次缺失，请核实记录")
     if user.role != "admin" and batch.operator_id != user.id:
         raise HTTPException(404, "通知记录不存在")
     if delivery.status != "failed" or delivery.uncertain:
         raise HTTPException(409, "只允许重试明确失败的通知；成功或待核实通知不可重发")
-    if db.get(Employee, delivery.recipient_id).status != "active":
+    recipient = db.get(Employee, delivery.recipient_id)
+    if not recipient or recipient.status != "active":
         raise HTTPException(409, "通知对象当前不可用")
     delivery.status = "pending"
     delivery.attempts = 0

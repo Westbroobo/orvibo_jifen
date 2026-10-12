@@ -11,7 +11,7 @@ from sqlalchemy import delete, inspect
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
-from app.db import Base, make_engine
+from app.db import AppSession, Base, make_engine
 from app.models import Department, Employee, Membership, SystemState
 
 
@@ -29,16 +29,21 @@ def test_engine():
     if missing:
         engine.dispose()
         raise RuntimeError("测试库缺少表，请手动执行 database/schema.sql：" + "、".join(sorted(missing)))
+    if any(inspect(engine).get_foreign_keys(name) for name in Base.metadata.tables):
+        engine.dispose()
+        raise RuntimeError("测试库仍有外键，请先执行 database/schema.sql 第六段增量")
     yield engine
     engine.dispose()
 
 
 @pytest.fixture
 def factory(test_engine):
-    factory = sessionmaker(test_engine, expire_on_commit=False)
+    factory = sessionmaker(test_engine, class_=AppSession, expire_on_commit=False)
+    # 测试库清理走独立连接；业务会话禁止物理删除人员和历史。
+    with test_engine.begin() as connection:
+        for table in Base.metadata.tables.values():
+            connection.execute(delete(table))
     with factory.begin() as db:
-        for table in reversed(Base.metadata.sorted_tables):
-            db.execute(delete(table))
         db.add(SystemState(id=1))
         db.add_all([
             Department(id="rd", name="研发", path_ids=["rd"], path_names=["研发"]),

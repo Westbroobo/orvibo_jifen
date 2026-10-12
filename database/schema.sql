@@ -365,3 +365,104 @@ SET SESSION group_concat_max_len = @jifen_prefix_previous_concat_length;
 PREPARE jifen_prefix_rename_statement FROM @jifen_prefix_rename_sql;
 EXECUTE jifen_prefix_rename_statement;
 DEALLOCATE PREPARE jifen_prefix_rename_statement;
+
+-- =====================================================================
+-- 增量 2026-10-12（第六段）：移除全部积分系统外键并补充查询索引
+-- 先停止 API/worker，确认第五段已完成，在同一个 SQL 会话执行整个本段。
+-- 仅修改 16 张积分系统表；不删除数据，不移除主键、唯一索引或现有索引。
+-- 关联完整性改由新版代码在事务内校验；人员和业务历史禁止物理删除。
+-- 根据当前实际外键名称逐个删除，兼容改名前后名称及错误引用旧表的外键。
+-- 可重复执行；已有同等左前缀索引时跳过，避免重复创建。
+-- 需 ALTER 和 CREATE ROUTINE 权限；临时过程执行后删除，不常驻数据库。
+-- =====================================================================
+SET NAMES utf8mb4;
+DROP PROCEDURE IF EXISTS orvibo_jifen_remove_foreign_keys;
+DELIMITER $$
+CREATE PROCEDURE orvibo_jifen_remove_foreign_keys()
+BEGIN
+    DECLARE finished BOOL DEFAULT FALSE;
+    DECLARE target_table VARCHAR(100);
+    DECLARE target_constraint VARCHAR(100);
+    DECLARE target_index VARCHAR(100);
+    DECLARE target_columns VARCHAR(200);
+    DECLARE index_comment VARCHAR(200);
+    DECLARE covered_indexes INT;
+    DECLARE foreign_keys CURSOR FOR
+        SELECT TABLE_NAME, CONSTRAINT_NAME
+        FROM information_schema.REFERENTIAL_CONSTRAINTS
+        WHERE CONSTRAINT_SCHEMA = DATABASE()
+          AND TABLE_NAME IN (
+              'orvibo_jifen_balances', 'orvibo_jifen_batches', 'orvibo_jifen_deliveries',
+              'orvibo_jifen_departments', 'orvibo_jifen_employees', 'orvibo_jifen_event_receipts',
+              'orvibo_jifen_ledger', 'orvibo_jifen_ledger_cancellations', 'orvibo_jifen_login_states',
+              'orvibo_jifen_memberships', 'orvibo_jifen_message_recalls', 'orvibo_jifen_permission_audit',
+              'orvibo_jifen_presets', 'orvibo_jifen_previews', 'orvibo_jifen_sessions', 'orvibo_jifen_system_state'
+          )
+        ORDER BY TABLE_NAME, CONSTRAINT_NAME;
+    DECLARE required_indexes CURSOR FOR
+        SELECT 'orvibo_jifen_memberships', 'ix_memberships_department', 'department_id', '按部门查询员工归属'
+        UNION ALL SELECT 'orvibo_jifen_balances', 'ix_balances_month', 'month', '获取当月所有员工积分，避免扫描历史月份'
+        UNION ALL SELECT 'orvibo_jifen_employees', 'ix_employees_role_status', 'role,status', '检查有效管理员数量'
+        UNION ALL SELECT 'orvibo_jifen_batches', 'ix_batches_operator_created', 'operator_id,created_at', '查询操作员发送记录并按时间排序'
+        UNION ALL SELECT 'orvibo_jifen_deliveries', 'ix_deliveries_status_next', 'status,next_attempt_at', '领取待发送消息任务'
+        UNION ALL SELECT 'orvibo_jifen_deliveries', 'ix_deliveries_status_lease', 'status,lease_until', '恢复租约过期的发送任务'
+        UNION ALL SELECT 'orvibo_jifen_message_recalls', 'ix_message_recalls_status_next', 'status,next_attempt_at', '领取待撤回消息任务'
+        UNION ALL SELECT 'orvibo_jifen_message_recalls', 'ix_message_recalls_status_lease', 'status,lease_until', '恢复租约过期的撤回任务'
+        UNION ALL SELECT 'orvibo_jifen_message_recalls', 'ix_message_recalls_status_requested', 'status,requested_at', '按申请顺序补处理已撤回积分';
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET finished = TRUE;
+
+    IF (SELECT COUNT(*) FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (
+            'orvibo_jifen_balances', 'orvibo_jifen_batches', 'orvibo_jifen_deliveries',
+            'orvibo_jifen_departments', 'orvibo_jifen_employees', 'orvibo_jifen_event_receipts',
+            'orvibo_jifen_ledger', 'orvibo_jifen_ledger_cancellations', 'orvibo_jifen_login_states',
+            'orvibo_jifen_memberships', 'orvibo_jifen_message_recalls', 'orvibo_jifen_permission_audit',
+            'orvibo_jifen_presets', 'orvibo_jifen_previews', 'orvibo_jifen_sessions', 'orvibo_jifen_system_state'
+        )) <> 16 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '缺少积分系统表，请先按顺序执行第五段及前置增量';
+    END IF;
+
+    OPEN foreign_keys;
+    remove_loop: LOOP
+        FETCH foreign_keys INTO target_table, target_constraint;
+        IF finished THEN LEAVE remove_loop; END IF;
+        SET @jifen_remove_fk_sql = CONCAT('ALTER TABLE `', target_table, '` DROP FOREIGN KEY `',
+                                          REPLACE(target_constraint, '`', '``'), '`');
+        PREPARE jifen_remove_fk_statement FROM @jifen_remove_fk_sql;
+        EXECUTE jifen_remove_fk_statement;
+        DEALLOCATE PREPARE jifen_remove_fk_statement;
+    END LOOP;
+    CLOSE foreign_keys;
+
+    SET finished = FALSE;
+    OPEN required_indexes;
+    index_loop: LOOP
+        FETCH required_indexes INTO target_table, target_index, target_columns, index_comment;
+        IF finished THEN LEAVE index_loop; END IF;
+        SELECT COUNT(*) INTO covered_indexes FROM (
+            SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',') AS indexed_columns,
+                   MAX(SUB_PART IS NOT NULL) AS shortened, MIN(IS_VISIBLE = 'YES') AS visible
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = target_table
+            GROUP BY INDEX_NAME
+        ) AS existing_indexes
+        WHERE shortened = 0 AND visible = 1
+          AND (indexed_columns = target_columns OR indexed_columns LIKE CONCAT(target_columns, ',%'));
+        IF covered_indexes = 0 THEN
+            SET @jifen_add_index_sql = CONCAT('ALTER TABLE `', target_table, '` ADD INDEX `', target_index,
+                '` (`', REPLACE(target_columns, ',', '`, `'), '`) COMMENT ', QUOTE(index_comment));
+            PREPARE jifen_add_index_statement FROM @jifen_add_index_sql;
+            EXECUTE jifen_add_index_statement;
+            DEALLOCATE PREPARE jifen_add_index_statement;
+        END IF;
+    END LOOP;
+    CLOSE required_indexes;
+END$$
+DELIMITER ;
+CALL orvibo_jifen_remove_foreign_keys();
+DROP PROCEDURE orvibo_jifen_remove_foreign_keys;
+
+-- 执行结果应为 0；历史建表段仅保留升级路径，最终结构不含外键。
+SELECT COUNT(*) AS `积分系统剩余外键数量`
+FROM information_schema.REFERENTIAL_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE() AND LEFT(TABLE_NAME, 13) = 'orvibo_jifen_';

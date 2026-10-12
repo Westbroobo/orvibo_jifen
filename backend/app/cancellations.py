@@ -13,8 +13,10 @@ def cancel_score(db, ledger, actor_id, when, *, source="recall"):
     balance = db.get(Balance, (ledger.employee_id, ledger.month))
     if not balance:
         raise HTTPException(409, "积分余额缺失，请核实这笔操作的记录")
-    entries = db.execute(select(Ledger, Batch).join(Batch, Ledger.batch_id == Batch.id).where(
+    entries = db.execute(select(Ledger, Batch).outerjoin(Batch, Ledger.batch_id == Batch.id).where(
         Ledger.employee_id == ledger.employee_id, Ledger.month == ledger.month)).all()
+    if any(batch is None for _, batch in entries):
+        raise HTTPException(409, "积分流水关联批次缺失，请核实本月记录")
     cancelled_ids = set(db.scalars(select(LedgerCancellation.ledger_id).join(
         Ledger, LedgerCancellation.ledger_id == Ledger.id).where(
         Ledger.employee_id == ledger.employee_id, Ledger.month == ledger.month)))

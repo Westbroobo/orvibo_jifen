@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import get_settings
 
@@ -19,6 +19,22 @@ class Base(DeclarativeBase):
     pass
 
 
+class AppSession(Session):
+    """业务写入统一校验逻辑关联，不依赖数据库外键。"""
+
+
+@event.listens_for(AppSession, "before_flush")
+def check_logical_references(db, flush_context, instances):
+    from .data_integrity import validate_changes
+    validate_changes(db)
+
+
+@event.listens_for(AppSession, "do_orm_execute")
+def check_bulk_writes(execution):
+    from .data_integrity import guard_bulk_write
+    guard_bulk_write(execution)
+
+
 def make_engine(url: str):
     options = {"pool_pre_ping": True}
     if url.startswith("sqlite"):
@@ -30,13 +46,12 @@ def make_engine(url: str):
     if url.startswith("sqlite"):
         @event.listens_for(result, "connect")
         def configure_sqlite(connection, _):
-            connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA journal_mode=WAL")
     return result
 
 
 engine = make_engine(get_settings().database_url)
-SessionLocal = sessionmaker(engine, expire_on_commit=False)
+SessionLocal = sessionmaker(engine, class_=AppSession, expire_on_commit=False)
 
 
 def lock_state(db):

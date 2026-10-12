@@ -77,7 +77,7 @@ def test_multi_person_cancels_independently(factory, settings, when):
     batch_id, ids = sent_batch(factory, settings, when, ["admin", "operator"],
                                person_ids=["a", "b"], overrides={"b": 85})
     with factory() as db:
-        a_ids = list(db.scalars(select(Delivery.id).join(Ledger).where(
+        a_ids = list(db.scalars(select(Delivery.id).join(Ledger, Delivery.ledger_id == Ledger.id).where(
             Ledger.batch_id == batch_id, Ledger.employee_id == "a")))
     for delivery_id in a_ids:
         recall_one(factory, settings, when, delivery_id)

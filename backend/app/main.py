@@ -159,7 +159,7 @@ def history(page: int = Query(1, ge=1), user=Depends(auth.operator), db=Depends(
     result = []
     when = now_utc()
     for batch in db.scalars(statement.order_by(Batch.created_at.desc(), Batch.id).offset((page - 1) * 20).limit(20)):
-        statuses = db.scalars(select(Delivery.status).join(Ledger).where(Ledger.batch_id == batch.id)).all()
+        statuses = db.scalars(select(Delivery.status).join(Ledger, Delivery.ledger_id == Ledger.id).where(Ledger.batch_id == batch.id)).all()
         summary = recall_summary(db, batch.id, when)
         result.append({"id": batch.id, "month": batch.month, "delta": batch.delta, "reason": batch.reason,
                        "created_at": batch.created_at.isoformat() + "Z", "operator_name": batch.snapshot["operator_name"],
@@ -175,7 +175,7 @@ def batch_detail(batch_id: str, page: int = Query(1, ge=1), user=Depends(auth.op
     batch = accessible_batch(db, batch_id, user)
     base = select(Delivery, Ledger.employee_id, MessageRecall).join(Ledger, Delivery.ledger_id == Ledger.id).outerjoin(
         MessageRecall, MessageRecall.delivery_id == Delivery.id).where(Ledger.batch_id == batch.id)
-    statuses = db.scalars(select(Delivery.status).join(Ledger).where(Ledger.batch_id == batch.id)).all()
+    statuses = db.scalars(select(Delivery.status).join(Ledger, Delivery.ledger_id == Ledger.id).where(Ledger.batch_id == batch.id)).all()
     rows = []
     when = now_utc()
     summary = recall_summary(db, batch.id, when)

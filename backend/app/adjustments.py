@@ -90,7 +90,10 @@ def commit_preview(db, user_id, token, idempotency_key, settings, when=None):
     if not preview or preview.owner_id != user.id:
         raise HTTPException(404, "预览不存在")
     if preview.batch_id:
-        return db.get(Batch, preview.batch_id)
+        batch = db.get(Batch, preview.batch_id)
+        if not batch:
+            raise HTTPException(409, "预览关联批次缺失，请核实操作记录")
+        return batch
     if preview.expires_at <= when or month_at(when) != preview.snapshot["month"]:
         raise HTTPException(409, "预览已过期或月份变化，请重新预览")
     request = AdjustmentRequest.model_validate(preview.request)

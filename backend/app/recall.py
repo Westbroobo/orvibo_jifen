@@ -14,24 +14,29 @@ RECALL_WINDOW = timedelta(hours=24)
 
 
 def recall_deadline(delivery):
-    return delivery.sent_at + RECALL_WINDOW if delivery.sent_at else None
+    return delivery.sent_at + RECALL_WINDOW if delivery and delivery.sent_at else None
 
 
 def can_recall(delivery, recall=None, when=None):
     when = when or now_utc()
     deadline = recall_deadline(delivery)
-    return bool(delivery.status == "sent" and delivery.message_id and deadline and when < deadline
+    return bool(delivery and delivery.status == "sent" and delivery.message_id and deadline and when < deadline
                 and (not recall or recall.status in {"failed", "review"} and recall.error_code != 230009))
 
 
 def score_results(db, batch_id):
-    rows = db.execute(select(Ledger, LedgerCancellation).outerjoin(LedgerCancellation).where(
+    rows = db.execute(select(Ledger, LedgerCancellation).outerjoin(LedgerCancellation, LedgerCancellation.ledger_id == Ledger.id).where(
         Ledger.batch_id == batch_id)).all()
-    return [{"ledger_id": ledger.id, "person_id": ledger.employee_id,
-             "original_total": ledger.final_total, "cancelled": cancellation is not None,
-             "cancelled_at": cancellation.cancelled_at.isoformat() + "Z" if cancellation else None,
-             "current_total": db.get(Balance, (ledger.employee_id, ledger.month)).total}
-            for ledger, cancellation in rows]
+    results = []
+    for ledger, cancellation in rows:
+        balance = db.get(Balance, (ledger.employee_id, ledger.month))
+        if not balance:
+            raise HTTPException(409, "积分余额缺失，请核实这笔操作的记录")
+        results.append({"ledger_id": ledger.id, "person_id": ledger.employee_id,
+                        "original_total": ledger.final_total, "cancelled": cancellation is not None,
+                        "cancelled_at": cancellation.cancelled_at.isoformat() + "Z" if cancellation else None,
+                        "current_total": balance.total})
+    return results
 
 
 def recall_summary(db, batch_id, when=None):
@@ -65,7 +70,7 @@ def enqueue_recall(db, delivery, user, when):
 
 
 def cancel_if_fully_recalled(db, ledger, actor_id, when, *, source="recall"):
-    rows = db.execute(select(Delivery.status, MessageRecall.status).outerjoin(MessageRecall).where(
+    rows = db.execute(select(Delivery.status, MessageRecall.status).outerjoin(MessageRecall, MessageRecall.delivery_id == Delivery.id).where(
         Delivery.ledger_id == ledger.id)).all()
     if not rows or any(sent != "sent" or recalled != "recalled" for sent, recalled in rows):
         return False
@@ -102,7 +107,7 @@ def reconcile_recalled_score(db, when=None):
     """Apply the new rule once to records whose cards were already recalled."""
     when = when or now_utc()
     lock_state(db)
-    unfinished = select(Delivery.id).outerjoin(MessageRecall).where(
+    unfinished = select(Delivery.id).outerjoin(MessageRecall, MessageRecall.delivery_id == Delivery.id).where(
         Delivery.ledger_id == Ledger.id, or_(Delivery.status != "sent", MessageRecall.status.is_(None),
                                             MessageRecall.status != "recalled")).correlate(Ledger).exists()
     row = db.execute(select(Ledger, MessageRecall).join(Delivery, Delivery.ledger_id == Ledger.id).join(
@@ -125,9 +130,15 @@ def claim_recall(db, settings, when=None):
     )).order_by(MessageRecall.next_attempt_at, MessageRecall.delivery_id).limit(1).with_for_update())
     if not recall:
         return None
+    delivery = db.get(Delivery, recall.delivery_id)
+    ledger = db.get(Ledger, delivery.ledger_id) if delivery else None
+    batch = db.get(Batch, ledger.batch_id) if ledger else None
+    if not batch:
+        recall.status = "review"
+        recall.last_error = "关联消息、积分流水或操作批次缺失，请核实记录"
+        return None
     if recall.status == "recalling":
         recall.uncertain = True
-    delivery = db.get(Delivery, recall.delivery_id)
     if recall_deadline(delivery) is None or when >= recall_deadline(delivery):
         recall.status = "review" if recall.uncertain else "failed"
         recall.last_error = "已超过系统 24 小时撤回时限，请核实飞书中的消息状态"
@@ -147,24 +158,28 @@ def complete_recall(db, task, settings, *, error=None, when=None):
     when = when or now_utc()
     lock_state(db)
     recall = db.get(MessageRecall, task["delivery_id"])
-    if recall.status != "recalling" or recall.lease_token != task["lease_token"]:
+    if not recall or recall.status != "recalling" or recall.lease_token != task["lease_token"]:
         return
     recall.lease_until = recall.lease_token = None
+    delivery = db.get(Delivery, recall.delivery_id)
+    ledger = db.get(Ledger, delivery.ledger_id) if delivery else None
+    if not ledger or not db.get(Batch, ledger.batch_id):
+        recall.status = "review"
+        recall.last_error = "撤回关联记录缺失，请核实消息及积分，暂不作废积分"
+        recall.uncertain = True
+        return
     if error is None:
         recall.status = "recalled"
         recall.recalled_at = when
         recall.last_error = None
         recall.error_code = None
         recall.uncertain = False
-        delivery = db.get(Delivery, recall.delivery_id)
-        ledger = db.get(Ledger, delivery.ledger_id)
         db.flush()
         cancel_if_fully_recalled(db, ledger, recall.actor_id, when)
         return
     recall.last_error = str(error)
     recall.error_code = error.code
     recall.uncertain = recall.uncertain or error.uncertain
-    delivery = db.get(Delivery, recall.delivery_id)
     if (error.retryable or error.uncertain) and recall.attempts < settings.max_send_attempts and when < recall_deadline(delivery):
         recall.status = "pending"
         recall.next_attempt_at = when + timedelta(seconds=min(300, 2 ** recall.attempts * 5))

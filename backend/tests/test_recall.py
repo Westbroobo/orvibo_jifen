@@ -18,7 +18,7 @@ from test_api import client, login
 def sent_batch(factory, settings, when, recipients=None, **changes):
     batch_id = submit(factory, settings, when, request(recipients={"person_ids": recipients or ["operator"]}, **changes))
     with factory.begin() as db:
-        deliveries = db.scalars(select(Delivery).join(Ledger).where(Ledger.batch_id == batch_id)).all()
+        deliveries = db.scalars(select(Delivery).join(Ledger, Delivery.ledger_id == Ledger.id).where(Ledger.batch_id == batch_id)).all()
         for delivery in deliveries:
             delivery.status = "sent"
             delivery.message_id = "om_" + delivery.id
