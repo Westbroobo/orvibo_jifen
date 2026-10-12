@@ -24,7 +24,7 @@ fieldset:disabled{opacity:.7}
 button,.person-option,.chip,.opt,.navigation button{transition:background-color .12s,border-color .12s,color .12s}
 button:active:not(:disabled){transform:translateY(1px)}
 .primary-button:active:not(:disabled){background:var(--accent-deep)}
-.opt,.balance-line b,.signed-number{transition:color .15s}
+.opt,.signed-number{transition:color .15s}
 
 /* ========== 布局骨架 ========== */
 .page{max-width:1380px;margin:auto;padding:0 24px 32px}
@@ -90,11 +90,6 @@ button:active:not(:disabled){transform:translateY(1px)}
 .points-arrows button+button{border-top:1px solid var(--line)}
 .points-arrows button:hover:not(:disabled){background:var(--accent-soft);color:var(--accent-deep)}
 .points-arrows button:focus-visible{outline-offset:-3px}
-.balance-row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding:8px 0;font-size:var(--fs-sm)}
-.balance-row>div{min-width:0}
-.balance-line{margin-left:12px;color:var(--muted);font-family:var(--mono);font-size:var(--fs-sm)}
-.manual-toggle{grid-column:2;grid-row:2;justify-self:end;display:flex;align-items:center;gap:4px;font-size:var(--fs-xs);color:var(--muted)}
-input.override-input{grid-column:3;grid-row:2;width:90px;font-family:var(--mono);padding:4px}
 .hint{font-size:var(--fs-xs);color:var(--muted);line-height:1.7}
 .recipient-heading,.recipient-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .recipient-heading .field-label{margin:0}
@@ -110,6 +105,8 @@ input.override-input{grid-column:3;grid-row:2;width:90px;font-family:var(--mono)
 .primary-button:hover:not(:disabled){background:var(--accent-deep)}
 .preview-panel{position:sticky;top:24px}
 .preview-panel>select{margin-bottom:16px}
+.total-guidance{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:var(--fs-xs);color:var(--muted);line-height:1.8}
+.total-guidance p{margin:0}.total-guidance p+p{margin-top:6px}.total-guidance b{color:var(--text);font-weight:700}
 .empty-preview{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:250px;border:1px dashed var(--line);border-radius:var(--r-md);color:var(--muted);font-size:var(--fs-sm);text-align:center}
 .preview-details{margin:16px 0;font-size:var(--fs-sm);color:var(--muted)}
 .preview-details details{margin:8px 0}

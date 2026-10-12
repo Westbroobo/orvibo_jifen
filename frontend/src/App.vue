@@ -28,10 +28,10 @@ function stepPoints(step: number) {
   const current = Number.isInteger(points.value) ? points.value : 0
   points.value = Math.min(2_000_000_000, Math.max(1, current + step))
 }
-const manual = ref<Record<string, boolean>>({})
-const overrides = ref<Record<string, number>>({})
+const overrides = ref<Record<string, string>>({})
+const editingTotal = ref(false)
 const preview = ref<Preview | null>(null)
-const previewIndex = ref(0)
+const previewPersonId = ref('')
 const confirmation = ref(false)
 const idempotency = ref('')
 const busy = ref(false)
@@ -86,20 +86,37 @@ const targetWarnings = computed(() => targetIds.value.flatMap(id => {
 }))
 const displayAdminPeople = computed(() => directory.value.people.filter(p => p.name.includes(adminQuery.value.trim())))
 const validPreview = computed(() => preview.value && new Date(preview.value.expires_at).getTime() > clock.value)
-const activeRow = computed(() => preview.value?.rows[previewIndex.value] ?? preview.value?.rows[0])
+const activeRow = computed(() => preview.value?.rows.find(row => row.person.id === draftPerson.value?.id) ?? preview.value?.rows[0])
 const detailScoreRows = computed(() => detail.value?.snapshot.rows.map(row => ({
   person: row.person, originalTotal: row.final_total,
   score: detail.value?.scores?.find(score => score.person_id === row.person.id),
 })) ?? [])
-const draftPerson = computed(() => selectedPeople.value[previewIndex.value] ?? selectedPeople.value[0])
+const draftPerson = computed(() => selectedPeople.value.find(person => person.id === previewPersonId.value) ?? selectedPeople.value[0])
+const totalErrors = computed(() => Object.fromEntries(selectedPeople.value.flatMap(person => {
+  const value = overrides.value[person.id]
+  if (value === undefined) return []
+  const total = Number(value)
+  return !value.trim() || !Number.isInteger(total) || Math.abs(total) > 2_000_000_000
+    ? [[person.id, `请为${person.name}填写有效的整数总分。`]] : []
+})))
+const totalWarnings = computed<string[]>(() => Object.values(totalErrors.value))
 const draftContext = computed<CardContext | null>(() => {
   const person = draftPerson.value
   if (!person) return null
   return { person_name: person.name, person_open_id: person.open_id, delta: delta.value,
     department: [...new Set(person.paths.map(path => path.names.join(' / ')).filter(Boolean))].sort().join('；') || '直属企业',
-    total: manual.value[person.id] ? overrides.value[person.id] ?? 0 : (totals.value[person.id] ?? 60) + delta.value,
+    total: overrides.value[person.id] !== undefined && !totalErrors.value[person.id]
+      ? Number(overrides.value[person.id]) : (totals.value[person.id] ?? 60) + delta.value,
     reason: reason.value || '待填写', operator_name: user.value?.name ?? '', month: month.value,
     time: '', operation: operation.value === 'plus' ? '加分' : '扣分' }
+})
+const cardContext = computed(() => activeRow.value?.context ?? draftContext.value)
+const cardPerson = computed(() => activeRow.value?.person ?? draftPerson.value)
+watch(targetIds, ids => {
+  for (const id of Object.keys(overrides.value)) if (!ids.includes(id)) delete overrides.value[id]
+})
+watch(selectedPeople, people => {
+  if (!people.some(person => person.id === previewPersonId.value)) previewPersonId.value = people[0]?.id ?? ''
 })
 const timeLabel = (value: string | null) => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '尚未同步'
 const roleLabels = { admin: '管理员', operator: '操作员', none: '未授权' }
@@ -205,6 +222,7 @@ const submitHint = computed(() => {
   if (loadingPage.value) return '正在加载…'
   if (!selectedPeople.value.length) return '请先选择记分对象'
   if (targetWarnings.value.length) return '请移除不可用的加减分对象'
+  if (totalWarnings.value.length) return '请检查手动总分'
   if (!reason.value.trim()) return '请填写原因'
   if (recipientWarnings.value.length) return '通知范围存在冲突,请先处理'
   if (recipientsResolving.value) return '正在解析通知范围…'
@@ -225,13 +243,17 @@ function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
 function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
 onUnmounted(() => { cancelPageLoad(); window.removeEventListener('keydown', onKeydown); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
 let previewTimer: ReturnType<typeof setTimeout> | undefined
-const previewReady = computed(() => page.value === 'console' && !busy.value && !loadingPage.value && !recipientsResolving.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
-watch([targets, targetWarnings, recipients, operation, points, reason, manual, overrides, resolvedRecipients, recipientWarnings, recipientsResolving], () => {
+const previewReady = computed(() => page.value === 'console' && !busy.value && !loadingPage.value && !editingTotal.value && !recipientsResolving.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && !totalWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
+watch([targets, targetWarnings, recipients, operation, points, reason, overrides, resolvedRecipients, recipientWarnings, recipientsResolving], () => {
   clearTimeout(previewTimer)
   preview.value = null; confirmation.value = false; idempotency.value = ''
   if (!previewReady.value) return
   previewTimer = setTimeout(() => { void makePreview() }, 600)
 }, { deep: true })
+watch(editingTotal, value => {
+  clearTimeout(previewTimer)
+  if (!value && !preview.value && previewReady.value) previewTimer = setTimeout(() => { void makePreview() }, 600)
+})
 watch([recipients, directory], () => {
   clearTimeout(resolveTimer); const sequence = ++resolveSequence
   recipientsResolving.value = true
@@ -243,26 +265,29 @@ watch([recipients, directory], () => {
   }, 150)
 }, { deep: true })
 
-function toggleManual(person: Person, checked: boolean) {
-  manual.value[person.id] = checked
-  if (checked) overrides.value[person.id] = (totals.value[person.id] ?? 60) + delta.value
+function updateTotal(value: string) {
+  if (cardPerson.value && !busy.value && !loadingPage.value) overrides.value[cardPerson.value.id] = value
+}
+function resetTotal() {
+  if (cardPerson.value && !busy.value && !loadingPage.value) delete overrides.value[cardPerson.value.id]
 }
 async function makePreview() {
-  if (busy.value || loadingPage.value || page.value !== 'console') return
+  if (busy.value || loadingPage.value || editingTotal.value || page.value !== 'console') return
+  if (totalWarnings.value.length) { error.value = totalWarnings.value[0] ?? '请检查手动总分'; return }
   if (recipientsResolving.value || !selectedPeople.value.length || targetWarnings.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
   await action(async () => {
     if (!Number.isInteger(points.value) || points.value <= 0) throw new Error('请输入正整数分值')
     const values: Record<string, number> = {}
-    targetIds.value.forEach(id => { if (manual.value[id]) values[id] = overrides.value[id] ?? 0 })
+    targetIds.value.forEach(id => { if (overrides.value[id] !== undefined) values[id] = Number(overrides.value[id]) })
     preview.value = await api<Preview>('/adjustments/preview', 'POST', { person_ids: targetIds.value, operation: operation.value, points: points.value, reason: reason.value, overrides: values, recipients: recipients.value })
-    previewIndex.value = 0; idempotency.value = crypto.randomUUID()
+    idempotency.value = crypto.randomUUID()
   })
 }
 async function commit() {
   if (!preview.value || !validPreview.value) return
   await action(async () => {
     const result = await api<{ id: string }>('/adjustments', 'POST', { preview_token: preview.value!.preview_token, idempotency_key: idempotency.value })
-    confirmation.value = false; preview.value = null; targets.value = []; manual.value = {}; overrides.value = {}; reason.value = ''
+    confirmation.value = false; preview.value = null; targets.value = []; overrides.value = {}; reason.value = ''
     await loadDetail(result.id); await refresh(); notice.value = '积分已记账，通知正在发送。'
   })
 }
@@ -391,7 +416,6 @@ async function confirmRecall() {
                 <button class="points-jump increase" type="button" aria-label="分值增加 5" :disabled="points >= 2000000000" @click="stepPoints(5)">+5</button>
               </div>
               <div><label class="field-label" for="reason">原因 <small>必填</small></label><textarea id="reason" v-model="reason" maxlength="2000" rows="3" placeholder="填写原因"></textarea></div>
-              <div v-if="selectedPeople.length"><div class="field-label">最终总分</div><div v-for="person in selectedPeople" :key="person.id" class="balance-row" role="group" :aria-label="`${person.name}总分`"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><span class="balance-line">{{ totals[person.id] ?? 60 }} → <b :class="operation === 'plus' ? 'plus-text' : 'minus-text'">{{ manual[person.id] ? overrides[person.id] : (totals[person.id] ?? 60) + delta }}</b></span></div><label class="manual-toggle"><input type="checkbox" :checked="manual[person.id] ?? false" @change="toggleManual(person, ($event.target as HTMLInputElement).checked)">手动总分</label><input v-if="manual[person.id]" v-model.number="overrides[person.id]" class="override-input" type="number" step="1" :aria-label="`${person.name}最终总分`"></div><p v-if="selectedPeople.some(person => manual[person.id])" class="hint">手动总分已包含本次加减。</p></div>
             </div>
             <div class="form-section recipient-section">
               <div class="recipient-heading"><label class="field-label" for="recipient-preset">发送名单</label><button type="button" class="text-link" @click="switchPage('lists')">维护名单</button></div>
@@ -406,8 +430,10 @@ async function confirmRecall() {
           </fieldset></form>
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
-          <select v-if="(preview?.rows.length ?? selectedPeople.length) > 1" v-model.number="previewIndex" aria-label="切换卡片预览人员"><option v-for="(person, index) in (preview ? preview.rows.map(r => r.person) : selectedPeople)" :key="person.id" :value="index">{{ person.name }}</option></select>
-          <CardPreview v-if="activeRow" :context="activeRow.context" :variables="activeRow.card.data.template_variable" :avatar-url="activeRow.person.avatar_url" /><CardPreview v-else-if="draftContext" :context="draftContext" :avatar-url="draftPerson?.avatar_url" /><div v-else class="empty-preview"><img class="empty-preview-logo" :src="logoUrl" alt="" width="36" height="36"><p>请选择记分对象</p></div>
+          <select v-if="selectedPeople.length > 1" v-model="previewPersonId" aria-label="切换卡片预览人员"><option v-for="person in selectedPeople" :key="person.id" :value="person.id">{{ person.name }}</option></select>
+          <CardPreview v-if="cardContext && cardPerson" :context="cardContext" :variables="activeRow?.card.data.template_variable" :avatar-url="cardPerson.avatar_url" editable-total :total-input="overrides[cardPerson.id]" :total-disabled="busy || loadingPage" :total-invalid="!!totalErrors[cardPerson.id]" @update-total="updateTotal" @reset-total="resetTotal" @editing-total="editingTotal = $event" /><div v-else class="empty-preview"><img class="empty-preview-logo" :src="logoUrl" alt="" width="36" height="36"><p>请选择记分对象</p></div>
+          <div v-if="cardContext" class="total-guidance"><p><b>自动计算：</b>本月上一笔总分 + 本次加减分；本月首次记分从 60 分开始。</p><p><b>手动覆盖：</b>直接修改卡片里的“当前总分”，作为本次最终结果和后续记分起点，不再额外加减。点击“恢复自动”取消覆盖。</p></div>
+          <p v-for="warning in totalWarnings" :key="warning" class="error-text" role="alert">{{ warning }}</p>
           <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button type="button" class="primary-button preview-send" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button></template>
         </aside>
         <div class="mobile-actions">
