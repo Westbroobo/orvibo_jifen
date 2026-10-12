@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
-import { emptySelection, unionSelection, recallLabels, statusLabels } from './types'
+import { unionSelection, recallLabels, statusLabels } from './types'
 import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
 import PersonMultiSelect from './components/PersonMultiSelect.vue'
 import CardPreview from './components/CardPreview.vue'
@@ -29,7 +29,6 @@ function stepPoints(step: number) {
   points.value = Math.min(2_000_000_000, Math.max(1, current + step))
 }
 const manual = ref<Record<string, boolean>>({})
-const mirrorRecipients = ref(false)
 const overrides = ref<Record<string, number>>({})
 const preview = ref<Preview | null>(null)
 const previewIndex = ref(0)
@@ -158,7 +157,7 @@ async function refresh(signal?: AbortSignal) {
   const [data, balances, configs] = await Promise.all([api<Directory>('/directory', 'GET', undefined, signal), api<Balances>('/balances', 'GET', undefined, signal), api<Preset[]>('/presets', 'GET', undefined, signal)])
   if (signal?.aborted) return
   directory.value = data; applyBalances(balances); presets.value = configs
-  if (presetId.value && !mirrorRecipients.value) {
+  if (presetId.value) {
     if (!configs.some(p => p.id === presetId.value)) { presetId.value = ''; notice.value = '原发送名单已删除，请重新选择。' }
     loadPreset()
   }
@@ -243,9 +242,6 @@ watch([recipients, directory], () => {
     finally { if (sequence === resolveSequence) recipientsResolving.value = false }
   }, 150)
 }, { deep: true })
-watch([targetIds, mirrorRecipients], () => {
-  if (mirrorRecipients.value) { presetId.value = ''; recipients.value = { ...emptySelection(), person_ids: [...targetIds.value] } }
-}, { deep: true })
 
 function toggleManual(person: Person, checked: boolean) {
   manual.value[person.id] = checked
@@ -272,7 +268,6 @@ async function commit() {
 }
 function loadPreset() {
   const preset = presets.value.find(p => p.id === presetId.value)
-  mirrorRecipients.value = false
   recipients.value = preset ? JSON.parse(JSON.stringify(preset.selection)) : unionSelection()
 }
 function savedPreset(saved: Preset) {
@@ -288,9 +283,9 @@ function editRange() {
 }
 function applyRange() {
   if (!rangeReady.value || busy.value) return
-  mirrorRecipients.value = false; presetId.value = ''; recipients.value = JSON.parse(JSON.stringify(rangeDraft.value)); rangeDialog.value = false
+  presetId.value = ''; recipients.value = JSON.parse(JSON.stringify(rangeDraft.value)); rangeDialog.value = false
 }
-function clearRecipientRange() { mirrorRecipients.value = false; presetId.value = ''; recipients.value = unionSelection() }
+function clearRecipientRange() { presetId.value = ''; recipients.value = unionSelection() }
 async function loadHistory(signal?: AbortSignal) {
   const sequence = ++historySequence
   loadingHistory.value = true
@@ -349,11 +344,12 @@ async function confirmRecall() {
 <template>
   <div class="page" :inert="rangeDialog">
     <header class="topbar">
-      <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="36" height="36"><span>ORVIBO_员工积分系统</span></a>
+      <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="30" height="30"><span>ORVIBO_员工积分系统</span></a>
       <div v-if="user" class="topbar-right">
+        <span v-if="authorized" class="workspace-month" aria-label="当前记分月份">{{ month }}</span>
         <div class="account-panel" aria-label="当前账号">
           <div class="account-identity">
-            <EmployeeAvatar :src="user.avatar_url" :name="user.name" />
+            <EmployeeAvatar :src="user.avatar_url" :name="user.name" size="small" />
             <div class="account-details"><strong class="account-name" :title="user.name">{{ user.name }}</strong><span class="account-role">{{ roleLabels[user.role] }}</span></div>
           </div>
           <div class="account-actions"><button type="button" class="logout-button" :disabled="busy" aria-label="退出登录" title="退出登录" @click="logout"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5H5v14h4M14 8l4 4-4 4M9 12h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg><span>退出</span></button></div>
@@ -367,7 +363,14 @@ async function confirmRecall() {
     <section v-else-if="!user" class="panel login-panel"><h1>{{ error ? '暂时无法进入系统' : '已退出登录' }}</h1><p v-if="!error">需要继续使用时，请授权飞书账号。</p><a class="primary-button" href="/api/auth/login">{{ error ? '重新授权飞书账号' : '使用飞书账号授权' }}</a><button v-if="demoAvailable" type="button" :disabled="busy" @click="action(async () => { await api('/auth/demo', 'POST'); await initialize() })">进入本地演示</button></section>
     <section v-else-if="!authorized" class="panel login-panel"><h1>当前账号暂无操作权限</h1><p>请联系管理员分配积分操作权限。{{ user.status === 'unknown' ? '人员目录尚待同步核实。' : '' }}</p><button type="button" :disabled="busy" @click="action(initialize)">重新检查权限</button></section>
     <template v-else>
-      <nav class="navigation" aria-label="功能导航"><button type="button" :class="{ active: page === 'console' }" :disabled="busy" @click="switchPage('console')">操作台</button><button type="button" :class="{ active: page === 'lists' }" :disabled="busy" @click="switchPage('lists')">发送名单</button><button type="button" :class="{ active: page === 'history' }" :disabled="busy" @click="switchPage('history')">发送记录</button><button v-if="user.role === 'admin'" type="button" :class="{ active: page === 'admin' }" :disabled="busy" @click="switchPage('admin')">权限管理</button><span>{{ month }}</span></nav>
+      <div class="workspace">
+      <nav class="navigation" aria-label="功能导航">
+        <button type="button" :class="{ active: page === 'console' }" :aria-current="page === 'console' ? 'page' : undefined" :disabled="busy" @click="switchPage('console')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" /></svg><span>操作台</span></button>
+        <button type="button" :class="{ active: page === 'lists' }" :aria-current="page === 'lists' ? 'page' : undefined" :disabled="busy" @click="switchPage('lists')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 5h6M14 9h6M14 13h6M14 17h6M4 19v-2a4 4 0 0 1 8 0v2" /><circle cx="8" cy="8" r="3" /></svg><span>发送名单</span></button>
+        <button type="button" :class="{ active: page === 'history' }" :aria-current="page === 'history' ? 'page' : undefined" :disabled="busy" @click="switchPage('history')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h11l3 3v13H5zM9 10h6M9 14h6M9 17h4" /></svg><span>发送记录</span></button>
+        <button v-if="user.role === 'admin'" type="button" :class="{ active: page === 'admin' }" :aria-current="page === 'admin' ? 'page' : undefined" :disabled="busy" @click="switchPage('admin')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6zM9 12l2 2 4-4" /></svg><span>权限管理</span></button>
+      </nav>
+      <div class="workspace-content">
       <p v-if="loadingPage" class="page-loading" role="status">正在加载…</p>
       <main v-if="page === 'console'" class="layout">
         <section class="panel" aria-label="积分操作">
@@ -392,9 +395,8 @@ async function confirmRecall() {
             </div>
             <div class="form-section recipient-section">
               <div class="recipient-heading"><label class="field-label" for="recipient-preset">发送名单</label><button type="button" class="text-link" @click="switchPage('lists')">维护名单</button></div>
-              <select id="recipient-preset" v-model="presetId" aria-label="选择发送名单" :disabled="mirrorRecipients" @change="loadPreset"><option value="">临时范围</option><optgroup v-if="publicPresets.length" label="公共名单"><option v-for="preset in publicPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup><optgroup v-if="personalPresets.length" label="我的名单"><option v-for="preset in personalPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup></select>
-              <label class="mirror-toggle"><input type="checkbox" v-model="mirrorRecipients">通知范围同记分对象</label>
-              <div class="recipient-toolbar"><span>{{ recipientsResolving ? '正在匹配…' : `${resolvedRecipients.length} 位通知对象` }}</span><div v-if="!mirrorRecipients" class="recipient-range-actions"><button v-if="resolvedRecipients.length || recipientWarnings.length" type="button" class="text-link" @click="clearRecipientRange">清空</button><button type="button" @click="editRange">{{ presetId ? '临时调整' : '选择范围' }}</button></div></div>
+              <select id="recipient-preset" v-model="presetId" aria-label="选择发送名单" @change="loadPreset"><option value="">临时范围</option><optgroup v-if="publicPresets.length" label="公共名单"><option v-for="preset in publicPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup><optgroup v-if="personalPresets.length" label="我的名单"><option v-for="preset in personalPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup></select>
+              <div class="recipient-toolbar"><span>{{ recipientsResolving ? '正在匹配…' : `${resolvedRecipients.length} 位通知对象` }}</span><div class="recipient-range-actions"><button v-if="resolvedRecipients.length || recipientWarnings.length" type="button" class="text-link" @click="clearRecipientRange">清空</button><button type="button" @click="editRange">{{ presetId ? '临时调整' : '选择范围' }}</button></div></div>
               <details v-if="resolvedRecipients.length" class="recipient-fold"><summary>查看通知名单</summary><div class="chips recipient-chips"><span v-for="person in resolvedRecipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details>
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
@@ -429,6 +431,8 @@ async function confirmRecall() {
         <div v-if="historyTotal > 20" class="pagination"><button type="button" :disabled="busy || loadingHistory || historyPage <= 1" @click="historyPage--; switchPage('history')">上一页</button><span>{{ historyPage }} / {{ Math.max(1, Math.ceil(historyTotal / 20)) }}</span><button type="button" :disabled="busy || loadingHistory || historyPage * 20 >= historyTotal" @click="historyPage++; switchPage('history')">下一页</button></div>
       </section>
       <section v-else-if="user.role === 'admin'" class="panel"><DirectorySync :busy="busy || loadingPage" @synced="switchPage('admin')" /><input v-model="adminQuery" type="search" aria-label="权限管理搜索" placeholder="搜索姓名"><div class="admin-head"><span>姓名</span><span>状态</span><span>权限</span></div><div class="admin-table"><div v-for="person in displayAdminPeople" :key="person.id" class="admin-row"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></div><span>{{ statusLabels[person.status] }}</span><select :value="person.role" :aria-label="`${person.name}权限`" :disabled="busy || loadingPage || person.status !== 'active' && person.role === 'none'" @change="updateRole(person, $event)"><option value="none">未授权</option><option value="operator" :disabled="person.status !== 'active'">操作员</option><option value="admin" :disabled="person.status !== 'active'">管理员</option></select></div></div></section>
+      </div>
+      </div>
     </template>
   </div>
   <Transition name="modal">
