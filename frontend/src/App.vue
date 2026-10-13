@@ -9,6 +9,7 @@ import EmployeeAvatar from './components/EmployeeAvatar.vue'
 import DirectorySync from './components/DirectorySync.vue'
 import RecipientLists from './components/RecipientLists.vue'
 import RecipientRangeEditor from './components/RecipientRangeEditor.vue'
+import RecipientPresetSelect from './components/RecipientPresetSelect.vue'
 
 const logoUrl = '/logo.svg'
 const user = ref<User | null>(null)
@@ -45,10 +46,11 @@ const rangeDraft = ref(unionSelection())
 const rangeReady = ref(false)
 const rangeClose = ref<HTMLButtonElement | null>(null)
 const recipientsResolving = ref(false)
-const publicPresets = computed(() => presets.value.filter(p => p.scope === 'public'))
-const personalPresets = computed(() => presets.value.filter(p => p.scope === 'personal'))
 const resolvedRecipients = ref<Person[]>([])
 const recipientWarnings = ref<string[]>([])
+const hasRecipientSelection = computed(() => !!presetId.value || !!recipients.value.department_ids?.length ||
+  recipients.value.levels.some(ids => ids.length > 0) || recipients.value.person_ids.length > 0 || recipients.value.extra_ids.length > 0)
+const recipientEditLabel = computed(() => presetId.value ? '调整名单' : hasRecipientSelection.value ? '编辑名单' : '临时选人')
 const history = ref<HistoryItem[]>([])
 const historyTotal = ref(0)
 const historyPage = ref(1)
@@ -419,9 +421,20 @@ async function confirmRecall() {
             </div>
             <div class="form-section recipient-section">
               <div class="recipient-heading"><label class="field-label" for="recipient-preset">发送名单</label><button type="button" class="text-link" @click="switchPage('lists')">维护名单</button></div>
-              <select id="recipient-preset" v-model="presetId" aria-label="选择发送名单" @change="loadPreset"><option value="">临时范围</option><optgroup v-if="publicPresets.length" label="公共名单"><option v-for="preset in publicPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup><optgroup v-if="personalPresets.length" label="我的名单"><option v-for="preset in personalPresets" :key="preset.id" :value="preset.id">{{ preset.name }}</option></optgroup></select>
-              <div class="recipient-toolbar"><span>{{ recipientsResolving ? '正在匹配…' : `${resolvedRecipients.length} 位通知对象` }}</span><div class="recipient-range-actions"><button v-if="resolvedRecipients.length || recipientWarnings.length" type="button" class="text-link" @click="clearRecipientRange">清空</button><button type="button" @click="editRange">{{ presetId ? '临时调整' : '选择范围' }}</button></div></div>
-              <details v-if="resolvedRecipients.length" class="recipient-fold"><summary>查看通知名单</summary><div class="chips recipient-chips"><span v-for="person in resolvedRecipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details>
+              <div class="recipient-controls">
+                <RecipientPresetSelect id="recipient-preset" v-model="presetId" :presets="presets" :placeholder="!presetId && hasRecipientSelection ? '临时名单' : '选择已有名单'" :disabled="busy || loadingPage" @change="loadPreset" />
+                <button type="button" class="recipient-edit" aria-haspopup="dialog" @click="editRange"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="7" r="3" /><path d="M3 20v-2a6 6 0 0 1 12 0v2M19 7v6M16 10h6" /></svg><span>{{ recipientEditLabel }}</span></button>
+              </div>
+              <div v-if="recipientsResolving" class="recipient-loading" role="status"><span class="recipient-spinner" aria-hidden="true"></span>正在匹配通知名单…</div>
+              <div v-else-if="hasRecipientSelection || recipientWarnings.length" class="recipient-status">
+                <details v-if="resolvedRecipients.length" class="recipient-fold">
+                  <summary aria-label="查看通知名单"><span class="recipient-avatars" aria-hidden="true"><EmployeeAvatar v-for="person in resolvedRecipients.slice(0, 3)" :key="person.id" :src="person.avatar_url" :name="person.name" size="tiny" /></span><span class="recipient-count"><b>{{ resolvedRecipients.length }}</b> 位通知对象</span><svg class="recipient-chevron" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m7 4 6 6-6 6" /></svg></summary>
+                  <div class="chips recipient-chips"><span v-for="person in resolvedRecipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div>
+                </details>
+                <span v-else class="recipient-empty">暂无可通知人员</span>
+                <button type="button" class="recipient-clear" aria-label="清空通知名单" @click="clearRecipientRange">清空</button>
+              </div>
+              <p v-else class="recipient-empty">尚未选择通知对象</p>
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
@@ -504,9 +517,9 @@ async function confirmRecall() {
   <Transition name="modal">
     <div v-if="rangeDialog" class="modal-backdrop" @click.self="!busy && (rangeDialog = false)">
       <section class="panel modal range-modal" role="dialog" aria-modal="true" aria-labelledby="range-dialog-title">
-        <div class="panel-head flex-head"><h2 id="range-dialog-title" class="panel-title">临时通知范围</h2><button ref="rangeClose" type="button" :disabled="busy" @click="rangeDialog = false">取消</button></div>
+        <div class="panel-head flex-head"><h2 id="range-dialog-title" class="panel-title">{{ hasRecipientSelection ? '调整通知名单' : '选择通知对象' }}</h2><button ref="rangeClose" type="button" :disabled="busy" @click="rangeDialog = false">取消</button></div>
         <RecipientRangeEditor v-model="rangeDraft" :people="directory.people" :departments="directory.departments" @ready="rangeReady = $event" />
-        <div class="modal-actions"><button type="button" class="primary-button" :disabled="busy || !rangeReady" @click="applyRange">使用此范围</button></div>
+        <div class="modal-actions"><button type="button" class="primary-button" :disabled="busy || !rangeReady" @click="applyRange">使用此名单</button></div>
       </section>
     </div>
   </Transition>
