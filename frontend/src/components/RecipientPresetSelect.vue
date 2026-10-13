@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
-import type { Preset } from '../types'
+import type { Directory, Preset } from '../types'
 import RecipientListPreview from './RecipientListPreview.vue'
 
-const props = defineProps<{ id: string; modelValue: string; presets: Preset[]; placeholder: string; disabled?: boolean }>()
+const props = defineProps<{ id: string; modelValue: string; presets: Preset[]; directory: Directory; placeholder: string; disabled?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string]; change: [] }>()
 const root = ref<HTMLElement | null>(null)
 const trigger = ref<HTMLButtonElement | null>(null)
@@ -153,7 +153,7 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
-  <Teleport to="body"><RecipientListPreview v-if="previewPreset" :preset="previewPreset" @close="closePreview" /></Teleport>
+  <Teleport to="body"><RecipientListPreview v-if="previewPreset" :preset="previewPreset" :directory="directory" @close="closePreview" /></Teleport>
 </template>
 
 <style scoped>

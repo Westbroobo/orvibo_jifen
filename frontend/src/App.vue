@@ -422,7 +422,7 @@ async function confirmRecall() {
             <div class="form-section recipient-section">
               <div class="recipient-heading"><label class="field-label" for="recipient-preset">发送名单</label><button type="button" class="text-link" @click="switchPage('lists')">维护名单</button></div>
               <div class="recipient-controls">
-                <RecipientPresetSelect id="recipient-preset" v-model="presetId" :presets="presets" :placeholder="!presetId && hasRecipientSelection ? '临时名单' : '选择已有名单'" :disabled="busy || loadingPage" @change="loadPreset" />
+                <RecipientPresetSelect id="recipient-preset" v-model="presetId" :presets="presets" :directory="directory" :placeholder="!presetId && hasRecipientSelection ? '临时名单' : '选择已有名单'" :disabled="busy || loadingPage" @change="loadPreset" />
                 <button type="button" class="recipient-edit" aria-haspopup="dialog" @click="editRange"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="7" r="3" /><path d="M3 20v-2a6 6 0 0 1 12 0v2M19 7v6M16 10h6" /></svg><span>{{ recipientEditLabel }}</span></button>
               </div>
               <div v-if="recipientsResolving" class="recipient-loading" role="status"><span class="recipient-spinner" aria-hidden="true"></span>正在匹配通知名单…</div>
