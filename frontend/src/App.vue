@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
-import { unionSelection, recallLabels, statusLabels } from './types'
+import { unionSelection } from './types'
 import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
 import PersonMultiSelect from './components/PersonMultiSelect.vue'
 import CardPreview from './components/CardPreview.vue'
 import EmployeeAvatar from './components/EmployeeAvatar.vue'
 import PermissionsPanel from './components/PermissionsPanel.vue'
+import SendingHistory from './components/SendingHistory.vue'
+import BatchResultDialog from './components/BatchResultDialog.vue'
 import RecipientLists from './components/RecipientLists.vue'
 import RecipientRangeEditor from './components/RecipientRangeEditor.vue'
 import RecipientPresetSelect from './components/RecipientPresetSelect.vue'
@@ -57,11 +59,11 @@ const historyPage = ref(1)
 const loadingHistory = ref(false)
 const detail = ref<BatchDetail | null>(null)
 type Balances = { month: string; totals: Record<string, number>; versions?: Record<string, number> }
-const recallConfirmation = ref<{ batchId: string; deliveryId?: string; count: number; names: string } | null>(null)
+const recallConfirmation = ref<{ batchId: string; count: number; names: string } | null>(null)
 const clock = ref(Date.now())
 const confirmSend = ref<HTMLButtonElement | null>(null)
 const recallSend = ref<HTMLButtonElement | null>(null)
-const detailClose = ref<HTMLButtonElement | null>(null)
+const detailPanel = ref<InstanceType<typeof BatchResultDialog> | null>(null)
 let timer: ReturnType<typeof setInterval> | undefined
 let resolveTimer: ReturnType<typeof setTimeout> | undefined
 let resolveSequence = 0
@@ -87,10 +89,6 @@ const targetWarnings = computed(() => targetIds.value.flatMap(id => {
 }))
 const validPreview = computed(() => preview.value && new Date(preview.value.expires_at).getTime() > clock.value)
 const activeRow = computed(() => preview.value?.rows.find(row => row.person.id === draftPerson.value?.id) ?? preview.value?.rows[0])
-const detailScoreRows = computed(() => detail.value?.snapshot.rows.map(row => ({
-  person: row.person, originalTotal: row.final_total,
-  score: detail.value?.scores?.find(score => score.person_id === row.person.id),
-})) ?? [])
 const draftPerson = computed(() => selectedPeople.value.find(person => person.id === previewPersonId.value) ?? selectedPeople.value[0])
 const totalErrors = computed(() => Object.fromEntries(selectedPeople.value.flatMap(person => {
   const value = overrides.value[person.id]
@@ -120,23 +118,6 @@ watch(selectedPeople, people => {
 })
 const timeLabel = (value: string | null) => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '尚未同步'
 const roleLabels = { admin: '管理员', operator: '操作员', none: '未授权' }
-function resultSummary(counts: Record<string, number> | undefined, labels: Record<string, string>) {
-  return Object.entries(counts ?? {}).filter(([, count]) => count > 0)
-    .map(([status, count]) => `${labels[status] ?? status} ${count}`).join(' · ')
-}
-
-const historyStatusParts = (item: HistoryItem) => {
-  const parts: { text: string; error: boolean; pulse: boolean }[] = []
-  const add = (text: string, error = false, pulse = false) => parts.push({ text, error, pulse })
-  if (item.statuses.failed) add(`发送失败 ${item.statuses.failed}`, true)
-  if (item.statuses.review) add(`待核实 ${item.statuses.review}`, true)
-  if (item.recall_statuses?.recalled) add(`已撤回 ${item.recall_statuses.recalled}`)
-  if (item.cancelled_scores) add(`已作废 ${item.cancelled_scores} 笔记分`, true)
-  if (item.recall_statuses?.pending || item.recall_statuses?.recalling) add(`撤回处理中 ${(item.recall_statuses.pending ?? 0) + (item.recall_statuses.recalling ?? 0)}`, false, true)
-  if (item.recall_statuses?.failed) add(`撤回失败 ${item.recall_statuses.failed}`, true)
-  if (item.recall_statuses?.review) add(`撤回待核实 ${item.recall_statuses.review}`, true)
-  return parts
-}
 
 async function action(fn: () => Promise<void>) {
   if (busy.value) return
@@ -158,13 +139,16 @@ watch(confirmation, async (value) => {
   if (value) { captureOpener(); await nextTick(); confirmSend.value?.focus() }
   else restoreOpener()
 })
+let recallOpener: HTMLElement | null = null
 watch(recallConfirmation, async (value) => {
-  if (value) { captureOpener(); await nextTick(); recallSend.value?.focus() }
-  else restoreOpener()
+  if (value) { const active = document.activeElement; recallOpener = active instanceof HTMLElement ? active : null; await nextTick(); recallSend.value?.focus() }
+  else { await nextTick(); if (recallOpener?.isConnected) recallOpener.focus({ preventScroll: true }) }
 })
-watch(detail, async (value) => {
-  if (value) { captureOpener(); await nextTick(); detailClose.value?.focus() }
-  else restoreOpener()
+watch([() => !!detail.value, busy], async ([open, working], [wasOpen]) => {
+  if (open && !wasOpen) captureOpener()
+  await nextTick()
+  if (open && !working && (!wasOpen || document.activeElement === document.body)) detailPanel.value?.focusClose()
+  else if (!open && wasOpen) restoreOpener()
 })
 watch(rangeDialog, async (value) => {
   if (value) { captureOpener(); await nextTick(); rangeClose.value?.focus() }
@@ -347,8 +331,8 @@ async function switchPage(value: typeof page.value) {
 }
 async function updateRole(person: Person, event: Event) { const role = (event.target as HTMLSelectElement).value; await action(async () => { await api(`/admin/people/${person.id}/role`, 'PUT', { role }); user.value = await api<User>('/auth/me'); if (authorized.value) await refresh(); notice.value = '权限已更新。' }); if (error.value) (event.target as HTMLSelectElement).value = person.role }
 async function logout() { await action(async () => { await api('/auth/logout', 'POST'); user.value = null; closeDetail(); preview.value = null; setCsrf('') }) }
-async function retry(id: string) { await action(async () => { await api(`/deliveries/${id}/retry`, 'POST'); await loadDetail(detail.value!.id, detail.value!.page) }) }
-function recallStillAvailable(delivery: import('./types').Delivery) { return delivery.can_recall && !!delivery.recall_deadline && new Date(delivery.recall_deadline).getTime() > clock.value }
+async function retry(id: string) { await action(async () => { await api(`/deliveries/${id}/retry`, 'POST'); await loadDetail(detail.value!.id, detail.value!.page); if (page.value === 'history') await loadHistory() }) }
+function changeHistoryPage(value: number) { historyPage.value = value; void switchPage('history') }
 function askBatchRecall(item: HistoryItem | BatchDetail) {
   const names = 'names' in item ? item.names : item.snapshot.rows.map(row => row.person.name)
   recallConfirmation.value = { batchId: item.id, count: item.recall_available, names: names.join('、') }
@@ -357,7 +341,7 @@ async function confirmRecall() {
   const request = recallConfirmation.value
   if (!request) return
   await action(async () => {
-    const result = await api<{ accepted: number }>(request.deliveryId ? `/deliveries/${request.deliveryId}/recall` : `/adjustments/${request.batchId}/recall`, 'POST')
+    const result = await api<{ accepted: number }>(`/adjustments/${request.batchId}/recall`, 'POST')
     recallConfirmation.value = null
     if (detail.value?.id === request.batchId) await loadDetail(request.batchId, detail.value.page)
     if (page.value === 'history') await loadHistory()
@@ -367,7 +351,7 @@ async function confirmRecall() {
 </script>
 
 <template>
-  <div class="page" :class="{ 'permissions-layout': authorized && page === 'admin' }" :inert="rangeDialog">
+  <div class="page" :class="{ 'permissions-layout': authorized && page === 'admin', 'history-layout': authorized && page === 'history' }" :inert="rangeDialog || !!detail || confirmation || !!recallConfirmation">
     <header class="topbar">
       <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="30" height="30"><span>ORVIBO_员工积分系统</span></a>
       <div v-if="user" class="topbar-right">
@@ -453,20 +437,7 @@ async function confirmRecall() {
         </div>
       </main>
       <RecipientLists v-else-if="page === 'lists'" :presets="presets" :directory="directory" :user="user" :loading="loadingPage" @working="busy = $event" @saved="savedPreset" @deleted="deletedPreset" />
-      <section v-else-if="page === 'history'" class="panel">
-        <div class="panel-head flex-head"><h1 class="panel-title">发送记录</h1><button type="button" :disabled="busy || loadingHistory" @click="switchPage('history')">刷新</button></div>
-        <div v-if="loadingHistory" class="empty-state">加载中…</div>
-        <div v-else-if="!history.length" class="empty-state">还没有操作记录。</div>
-        <div v-for="item in history" :key="item.id" class="history-entry">
-          <button type="button" class="history-item" :disabled="busy" @click="action(() => loadDetail(item.id))">
-            <div><b>{{ item.names.join('、') }}</b><span class="signed-number" :class="item.delta > 0 ? 'plus-text' : 'minus-text'">{{ item.delta > 0 ? '+' : '' }}{{ item.delta }} 分</span></div>
-            <p>{{ item.reason }}</p><small>{{ timeLabel(item.created_at) }} · {{ item.operator_name }} · {{ item.statuses.sent ?? 0 }} / {{ item.message_count }} 已发送</small>
-            <p v-if="historyStatusParts(item).length" class="status-line"><template v-for="(part, index) in historyStatusParts(item)" :key="index"><span v-if="index"> · </span><span :class="{ 'error-text': part.error, pulse: part.pulse }">{{ part.text }}</span></template></p>
-          </button>
-          <div class="history-actions"><button v-if="item.recall_available" type="button" class="recall-button" :disabled="busy" @click="askBatchRecall(item)">撤回卡片 · {{ item.recall_available }}</button><button type="button" :disabled="busy" @click="action(() => loadDetail(item.id))">查看结果</button></div>
-        </div>
-        <div v-if="historyTotal > 20" class="pagination"><button type="button" :disabled="busy || loadingHistory || historyPage <= 1" @click="historyPage--; switchPage('history')">上一页</button><span>{{ historyPage }} / {{ Math.max(1, Math.ceil(historyTotal / 20)) }}</span><button type="button" :disabled="busy || loadingHistory || historyPage * 20 >= historyTotal" @click="historyPage++; switchPage('history')">下一页</button></div>
-      </section>
+      <SendingHistory v-else-if="page === 'history'" :items="history" :total="historyTotal" :page="historyPage" :loading="loadingHistory" :busy="busy" @refresh="switchPage('history')" @change-page="changeHistoryPage" @detail="action(() => loadDetail($event))" @recall="askBatchRecall" />
       <PermissionsPanel v-else-if="user.role === 'admin'" :directory="directory" :busy="busy || loadingPage" @synced="switchPage('admin')" @change-role="updateRole" />
       </div>
       </div>
@@ -475,40 +446,17 @@ async function confirmRecall() {
   <Transition name="modal">
   <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p class="reason-box">{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button type="button" :disabled="busy" @click="confirmation = false">返回</button><button ref="confirmSend" type="button" class="primary-button" :class="{ busy }" :disabled="busy || loadingPage || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
   <Transition name="modal">
-  <div v-if="detail" class="modal-backdrop" @click.self="!busy && closeDetail()">
-    <section class="panel modal wide-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-      <div class="flex-head"><h2 id="detail-title" class="panel-title">发送及撤回结果</h2><button ref="detailClose" type="button" aria-label="关闭发送结果" :disabled="busy" @click="closeDetail">×</button></div>
-      <div class="modal-section-title">逐人积分状态</div>
-      <div class="score-results" aria-label="逐人积分状态">
-        <div v-for="row in detailScoreRows" :key="row.person.id" class="score-result">
-          <div class="score-person"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><b>{{ row.person.name }}</b><span class="score-state" :class="{ cancelled: row.score?.cancelled }">{{ row.score ? row.score.cancelled ? '记分已作废' : '积分有效' : '积分状态待更新' }}</span></div>
-          <div class="score-values"><span>发送时总分 <b>{{ row.originalTotal }}</b> 分</span><span v-if="row.score">{{ detail.snapshot.month }} 当前总分 <b>{{ row.score.current_total }}</b> 分</span></div>
-          <small v-if="row.score?.cancelled_at">作废时间：{{ timeLabel(row.score.cancelled_at) }}</small>
-        </div>
-      </div>
-      <p v-if="resultSummary(detail.statuses, statusLabels)" class="hint">{{ resultSummary(detail.statuses, statusLabels) }}</p>
-      <div v-if="resultSummary(detail.recall_statuses, recallLabels) || detail.recall_available" class="recall-toolbar"><p v-if="resultSummary(detail.recall_statuses, recallLabels)" class="hint" :class="{ pulse: detail.recall_statuses?.pending || detail.recall_statuses?.recalling }">{{ resultSummary(detail.recall_statuses, recallLabels) }}</p><button v-if="detail.recall_available" type="button" class="recall-button" :disabled="busy" @click="askBatchRecall(detail)">撤回本批卡片 · {{ detail.recall_available }}</button></div>
-      <div class="modal-section-title">通知明细</div>
-      <div class="deliveries"><div v-for="delivery in detail.deliveries" :key="delivery.id" class="delivery-row">
-        <div><b>{{ detail.snapshot.rows.find(r => r.person.id === delivery.person_id)?.person.name }} → {{ delivery.recipient_name }}</b><small>{{ delivery.message_id || delivery.last_error || '等待后台发送' }}</small><p v-if="delivery.recall_error" class="error-text">{{ delivery.recall_error }}</p><small v-if="delivery.recalled_at">撤回确认时间：{{ timeLabel(delivery.recalled_at) }}</small><small v-else-if="recallStillAvailable(delivery)">可申请至 {{ timeLabel(delivery.recall_deadline) }}</small></div>
-        <span>{{ delivery.recall_status ? recallLabels[delivery.recall_status] : statusLabels[delivery.status] }}</span>
-        <button v-if="recallStillAvailable(delivery)" type="button" class="recall-button" :disabled="busy" @click="recallConfirmation = { batchId: detail.id, deliveryId: delivery.id, count: 1, names: delivery.recipient_name }">{{ delivery.recall_status ? '重试撤回' : '撤回' }}</button>
-        <button v-else-if="delivery.status === 'failed'" type="button" :disabled="busy" @click="retry(delivery.id)">重试发送</button>
-        <small v-else-if="delivery.status === 'sent' && !delivery.recall_status && !recallStillAvailable(delivery)">已超撤回时限</small>
-      </div></div>
-      <div class="pagination"><template v-if="detail.total > 100"><button type="button" :disabled="busy || detail.page <= 1" @click="action(() => loadDetail(detail!.id, detail!.page - 1))">上一页</button><small>{{ detail.page }} / {{ Math.max(1, Math.ceil(detail.total / 100)) }}</small><button type="button" :disabled="busy || detail.page * 100 >= detail.total" @click="action(() => loadDetail(detail!.id, detail!.page + 1))">下一页</button></template><button type="button" :disabled="busy" @click="action(() => loadDetail(detail!.id, detail!.page))">刷新</button></div>
-    </section>
-  </div>
+  <BatchResultDialog v-if="detail" ref="detailPanel" :detail="detail" :busy="busy" :error="error" :clock="clock" :confirming-recall="!!recallConfirmation" @close="closeDetail" @refresh="action(() => loadDetail(detail!.id, detail!.page))" @recall="askBatchRecall" @retry="retry" @change-page="action(() => loadDetail(detail!.id, $event))" />
 </Transition>
   <Transition name="modal">
   <div v-if="recallConfirmation" class="modal-backdrop recall-confirmation" @click.self="!busy && (recallConfirmation = null)">
     <section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="recall-title">
-      <h2 id="recall-title" class="panel-title">确认撤回</h2>
-      <p>{{ recallConfirmation.deliveryId ? '通知接收人' : '记分对象' }}：{{ recallConfirmation.names }}</p>
-      <p>撤回 {{ recallConfirmation.count }} 条卡片</p>
-      <p class="hint">全部通知撤回成功后，对应记分作废；部分撤回仍有效。</p>
+      <h2 id="recall-title" class="panel-title">确认整批撤回</h2>
+      <p class="reason-box">{{ recallConfirmation.names }}</p>
+      <p>本次申请撤回 <b>{{ recallConfirmation.count }}</b> 条卡片</p>
+      <p class="hint">处理本次操作中 24 小时内可撤回的卡片，自动跳过已撤回的通知。每位记分对象的全部通知撤回成功后，该记分作废。</p>
       <p v-if="error" class="error-text">{{ error }}</p>
-      <div class="modal-actions"><button type="button" :disabled="busy" @click="recallConfirmation = null">取消</button><button ref="recallSend" type="button" class="primary-button" :class="{ busy }" :disabled="busy" @click="confirmRecall">{{ busy ? '正在提交…' : '确认撤回' }}</button></div>
+      <div class="modal-actions"><button type="button" :disabled="busy" @click="recallConfirmation = null">取消</button><button ref="recallSend" type="button" class="primary-button" :class="{ busy }" :disabled="busy" @click="confirmRecall">{{ busy ? '正在提交…' : '确认整批撤回' }}</button></div>
     </section>
   </div>
 </Transition>
