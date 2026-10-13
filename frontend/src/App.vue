@@ -6,7 +6,7 @@ import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, 
 import PersonMultiSelect from './components/PersonMultiSelect.vue'
 import CardPreview from './components/CardPreview.vue'
 import EmployeeAvatar from './components/EmployeeAvatar.vue'
-import DirectorySync from './components/DirectorySync.vue'
+import PermissionsPanel from './components/PermissionsPanel.vue'
 import RecipientLists from './components/RecipientLists.vue'
 import RecipientRangeEditor from './components/RecipientRangeEditor.vue'
 import RecipientPresetSelect from './components/RecipientPresetSelect.vue'
@@ -58,7 +58,6 @@ const loadingHistory = ref(false)
 const detail = ref<BatchDetail | null>(null)
 type Balances = { month: string; totals: Record<string, number>; versions?: Record<string, number> }
 const recallConfirmation = ref<{ batchId: string; deliveryId?: string; count: number; names: string } | null>(null)
-const adminQuery = ref('')
 const clock = ref(Date.now())
 const confirmSend = ref<HTMLButtonElement | null>(null)
 const recallSend = ref<HTMLButtonElement | null>(null)
@@ -86,7 +85,6 @@ const targetWarnings = computed(() => targetIds.value.flatMap(id => {
   const person = directory.value.people.find(p => p.id === id)
   return person?.status === 'active' ? [] : [`${person?.name ?? '已选人员'}当前不可用，请移除后重新选择。`]
 }))
-const displayAdminPeople = computed(() => directory.value.people.filter(p => p.name.includes(adminQuery.value.trim())))
 const validPreview = computed(() => preview.value && new Date(preview.value.expires_at).getTime() > clock.value)
 const activeRow = computed(() => preview.value?.rows.find(row => row.person.id === draftPerson.value?.id) ?? preview.value?.rows[0])
 const detailScoreRows = computed(() => detail.value?.snapshot.rows.map(row => ({
@@ -369,7 +367,7 @@ async function confirmRecall() {
 </script>
 
 <template>
-  <div class="page" :inert="rangeDialog">
+  <div class="page" :class="{ 'permissions-layout': authorized && page === 'admin' }" :inert="rangeDialog">
     <header class="topbar">
       <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="30" height="30"><span>ORVIBO_员工积分系统</span></a>
       <div v-if="user" class="topbar-right">
@@ -469,7 +467,7 @@ async function confirmRecall() {
         </div>
         <div v-if="historyTotal > 20" class="pagination"><button type="button" :disabled="busy || loadingHistory || historyPage <= 1" @click="historyPage--; switchPage('history')">上一页</button><span>{{ historyPage }} / {{ Math.max(1, Math.ceil(historyTotal / 20)) }}</span><button type="button" :disabled="busy || loadingHistory || historyPage * 20 >= historyTotal" @click="historyPage++; switchPage('history')">下一页</button></div>
       </section>
-      <section v-else-if="user.role === 'admin'" class="panel"><DirectorySync :busy="busy || loadingPage" @synced="switchPage('admin')" /><input v-model="adminQuery" type="search" aria-label="权限管理搜索" placeholder="搜索姓名"><div class="admin-head"><span>姓名</span><span>状态</span><span>权限</span></div><div class="admin-table"><div v-for="person in displayAdminPeople" :key="person.id" class="admin-row"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="small" /><div><b>{{ person.name }}</b><small>{{ person.paths.map(p => p.names.join(' / ')).join('；') || '直属企业' }}</small></div><span>{{ statusLabels[person.status] }}</span><select :value="person.role" :aria-label="`${person.name}权限`" :disabled="busy || loadingPage || person.status !== 'active' && person.role === 'none'" @change="updateRole(person, $event)"><option value="none">未授权</option><option value="operator" :disabled="person.status !== 'active'">操作员</option><option value="admin" :disabled="person.status !== 'active'">管理员</option></select></div></div></section>
+      <PermissionsPanel v-else-if="user.role === 'admin'" :directory="directory" :busy="busy || loadingPage" @synced="switchPage('admin')" @change-role="updateRole" />
       </div>
       </div>
     </template>
