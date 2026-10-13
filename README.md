@@ -4,7 +4,7 @@
 
 人员定时同步默认每天北京时间 02:00。管理员在“权限管理 → 同步设置”修改间隔天数和时间，或关闭定时同步；页面显示最近及下次同步时间。手动同步及飞书人员变更同步独立触发，不改变定时计划。
 
-发送记录支持整批或单条撤回：系统接受 24 小时内的申请，实际时限以企业飞书设置为准。同一笔记分的全部通知撤回成功后，积分作废并重算该月总分；部分撤回时积分仍有效，历史记录保留。
+发送记录一行对应一次加减分操作，支持整批撤回。每位记分对象的全部通知撤回成功后，积分作废并重算该月总分；历史记录保留。
 
 ## 本地启动（Windows）
 
@@ -22,26 +22,19 @@ py -3.13 scripts\start-local.py
 
 ## 服务器部署
 
-1. 在腾讯云 MySQL 8 中创建空数据库 `jifen`，字符集使用 `utf8mb4`，手动执行 [database/schema.sql](database/schema.sql)；允许部署服务器连接，为应用账号授予读写权限。
-2. 将 [.env.example](.env.example) 复制为 `.env`，按中文注释填写。`SESSION_SECRET` 可用 `openssl rand -hex 32` 生成；如果曾手动添加 `APP_ENV`、`COOKIE_SECURE`，部署时删除这两项以使用生产默认值。
-3. 按[飞书配置清单](docs/feishu-setup.md)配置企业自建应用：网页登录、机器人、通讯录权限、可用范围和长连接事件订阅，并发布应用。
-4. 在两套卡片的使用权限中添加该飞书应用。模板、版本和变量已固定在代码中，无需填写环境变量，详见[卡片接入说明](docs/card-templates.md)。
-5. 在安装了 Docker Compose 的服务器上，于项目根目录执行：
+服务器已安装 Docker Compose。按[部署说明](docs/deployment.md)拉取代码、填写 `.env`，在数据库工具中手动执行所需 DDL，再在项目根目录运行：
 
 ```sh
-docker compose up --build -d
+docker compose build api && docker compose build frontend && docker compose up -d --wait --wait-timeout 180
 ```
 
-6. 配置域名及 HTTPS 反向代理，转发到 `127.0.0.1:8080`。`PUBLIC_URL` 填该 HTTPS 地址；`FEISHU_REDIRECT_URI` 填该地址加 `/api/auth/callback`，并在飞书后台登记相同回调。
-7. 等待首次人员同步后，用初始管理员的飞书账号登录，核对人员、分配操作员权限，先选少量通知对象完成预览和发送测试。
+包含前端、API 和 worker 三个容器，仅前端入口监听 `8888`。沿用现有域名网关回源该端口，无需修改 DNS 或 Caddy；飞书回调登记 `https://jifen.orvibo.com/api/auth/callback`。服务器无需安装 Python 或 Node.js。
 
-初始管理员在 `INITIAL_ADMIN_USER_IDS` 中填写**飞书 user_id**，人员同步后完成初始化；后续在系统权限页面管理。
+飞书权限及卡片授权见[飞书配置清单](docs/feishu-setup.md)。首次人员同步后，用 `INITIAL_ADMIN_USER_IDS` 中的飞书 **user_id** 对应账号登录，再分配操作员权限。
 
 查看运行日志：`docker compose logs -f api worker`。
 
-数据库结构统一维护在 `database/schema.sql`：新数据库执行全文；已有数据库只执行末尾尚未应用的增量段。后续变更按日期追加，启动不会自动修改结构。
-
-本次先停止服务，已有数据库执行末尾“增量 2026-10-12（第七段）：公共及个人发送名单”，再启动。此前未执行的增量按顺序补齐；最终 16 张表以 `orvibo_jifen_` 开头且不含外键，数据库连接配置照旧。
+数据库结构统一维护在 [database/schema.sql](database/schema.sql)：新数据库执行全文；已有数据库按顺序执行尚未应用的末尾增量。最终 16 张表以 `orvibo_jifen_` 开头且不含外键，启动不会自动修改结构。
 
 在“发送名单”维护个人名单，管理员还可维护所有操作员可选的公共名单。多个部门（含下级）和指定人员合并去重，使用时匹配最新在职人员；旧名单保留原部门交集规则。操作台选择名单即可，也可临时调整范围。
 
