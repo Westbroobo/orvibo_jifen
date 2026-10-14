@@ -49,6 +49,8 @@ curl -fsS http://127.0.0.1:8888/api/health
 
 健康接口应返回 `{"ok":true}`。API 和 worker 共用一个 Python 3.13 镜像；前端由 Node.js 24 构建，运行时使用 Nginx。服务器无需安装这两套运行环境。
 
+Python 依赖默认使用腾讯云 PyPI 镜像，npm 依赖使用 npmmirror。依赖安装与业务代码分层，并使用 BuildKit 下载缓存；基础镜像和依赖文件未变时，更新代码会直接复用已安装依赖。前端代码更新仍需编译。首次构建需要下载基础镜像和依赖。
+
 | 服务 | 用途 | 内存上限 |
 | --- | --- | --- |
 | api | 登录、权限、积分和查询 | 512 MB |
@@ -80,6 +82,20 @@ docker compose build api && docker compose build frontend && docker compose up -
 ```
 
 修改 `.env` 后用 `docker compose up -d --force-recreate --wait --wait-timeout 180` 重建容器以加载配置；无需重新构建镜像。若更新含数据库结构变更，先 `docker compose stop api worker`，手动执行新增 SQL，再启动。
+
+只改前端时，在拉取代码后执行：
+
+```bash
+docker compose build frontend && docker compose up -d --no-deps --wait --wait-timeout 180 frontend
+```
+
+只改后端时，在拉取代码后执行（API 和 worker 共用镜像）：
+
+```bash
+docker compose build api && docker compose up -d --no-deps --wait --wait-timeout 180 api worker
+```
+
+普通更新保留 Docker 构建缓存，不使用 `--no-cache`，不执行 `docker builder prune`。
 
 ```bash
 docker compose ps
