@@ -4,10 +4,12 @@ import { statusLabels } from '../types'
 import type { Directory, Person, Role } from '../types'
 import DirectorySync from './DirectorySync.vue'
 import EmployeeAvatar from './EmployeeAvatar.vue'
+import DepartmentTreeSelect from './DepartmentTreeSelect.vue'
 
 const props = defineProps<{ directory: Directory; busy: boolean }>()
 const emit = defineEmits<{ synced: []; 'change-role': [person: Person, event: Event] }>()
 const query = ref('')
+const departmentId = ref('')
 const role = ref<Role | ''>('')
 const status = ref('')
 const page = ref(1)
@@ -19,19 +21,20 @@ let resizeFrame: number | undefined
 const pageSize = 30
 const filtered = computed(() => props.directory.people.filter(person =>
   person.name.toLocaleLowerCase().includes(query.value.trim().toLocaleLowerCase()) &&
+  (!departmentId.value || person.paths.some(path => path.ids.includes(departmentId.value))) &&
   (!role.value || person.role === role.value) && (!status.value || person.status === status.value)))
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize)))
 const visible = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
 const activeCount = computed(() => props.directory.people.filter(person => person.status === 'active').length)
 const authorizedCount = computed(() => props.directory.people.filter(person => person.status === 'active' && person.role !== 'none').length)
-const hasFilters = computed(() => !!query.value || !!role.value || !!status.value)
-watch([query, role, status], () => { page.value = 1 })
+const hasFilters = computed(() => !!query.value || !!departmentId.value || !!role.value || !!status.value)
+watch([query, departmentId, role, status], () => { page.value = 1 })
 watch(pages, value => { page.value = Math.min(page.value, value) })
 watch([page, filtered], async () => {
   await nextTick()
   if (scroller.value) scroller.value.scrollTop = 0
 })
-function resetFilters() { query.value = ''; role.value = ''; status.value = '' }
+function resetFilters() { query.value = ''; departmentId.value = ''; role.value = ''; status.value = '' }
 function fitPanel() {
   if (!panel.value) return
   const fixedHeight = [...panel.value.children].filter(child => child !== scroller.value)
@@ -64,9 +67,10 @@ const paths = (person: Person) => person.paths.map(path => path.names.join(' / '
     <header class="permissions-heading"><h1 class="panel-title">权限管理</h1><div class="permissions-overview"><span>在职 <b>{{ activeCount }}</b> 人</span><span>已授权 <b>{{ authorizedCount }}</b> 人</span></div></header>
     <DirectorySync :busy="busy" @synced="emit('synced')" />
     <section ref="panel" class="panel permissions-panel" :style="{ height: `${panelHeight}px` }" aria-labelledby="employee-permissions-title">
-      <div class="permissions-table-heading"><h2 id="employee-permissions-title">员工权限</h2><span>共 {{ directory.people.length }} 人</span></div>
+      <div class="permissions-table-heading"><h2 id="employee-permissions-title">员工权限</h2><span>{{ hasFilters ? `匹配 ${filtered.length} / ${directory.people.length} 人` : `共 ${directory.people.length} 人` }}</span></div>
       <div class="permissions-filters">
         <div class="permissions-search"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5" /><path d="m12 12 4 4" /></svg><input v-model="query" type="search" aria-label="权限管理搜索" placeholder="搜索姓名" autocomplete="off"></div>
+        <DepartmentTreeSelect v-model="departmentId" class="permissions-department" :departments="directory.departments" />
         <select v-model="role" aria-label="筛选员工权限"><option value="">全部权限</option><option value="admin">管理员</option><option value="operator">操作员</option><option value="none">未授权</option></select>
         <select v-model="status" aria-label="筛选员工状态"><option value="">全部状态</option><option value="active">在职</option><option value="resigned">离职</option><option value="inactive">不可用</option><option value="unknown">待核实</option></select>
         <button v-if="hasFilters" type="button" class="permissions-reset" @click="resetFilters">重置</button>
@@ -108,6 +112,7 @@ const paths = (person: Person) => person.paths.map(path => path.names.join(' / '
 .permissions-search input{border:0;background:transparent;padding:9px 0;font-size:var(--fs-sm);height:38px}
 .permissions-search input:focus-visible{outline:none}
 .permissions-filters>select{flex:none;width:130px;height:40px;border-color:var(--control-line);font-size:var(--fs-sm)}
+.permissions-filters>.permissions-department{flex:0 1 300px;min-width:180px;width:300px;text-overflow:ellipsis}
 .permissions-reset{height:40px;padding:8px 12px}
 .permissions-row{display:grid;grid-template-columns:40px minmax(0,1fr) 100px 136px;align-items:center;gap:20px;padding:13px 24px;border-top:1px solid var(--line);font-size:var(--fs-sm)}
 .permissions-index{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted);text-align:center}
@@ -132,6 +137,6 @@ const paths = (person: Person) => person.paths.map(path => path.names.join(' / '
 .permissions-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line);padding:14px 24px;font-size:var(--fs-xs);color:var(--muted)}
 .permissions-footer .pagination{margin:0}
 .permissions-empty{display:flex;flex-direction:column;align-items:center;gap:12px;padding:48px 20px;color:var(--muted);font-size:var(--fs-sm)}
-@media(max-width:640px){.permissions-heading{align-items:flex-start;flex-direction:column;gap:6px}.permissions-table-heading{padding:18px 16px 0}.permissions-filters{padding:14px 16px 16px;gap:8px}.permissions-search{flex-basis:100%;min-width:0}.permissions-filters>select{flex:1;min-width:0;width:auto}.permissions-table-head{display:none}.permissions-row{grid-template-columns:24px minmax(0,1fr) 120px;gap:12px;padding:14px 16px}.permissions-index{grid-column:1;grid-row:1 / span 2;align-self:start;padding-top:3px}.permissions-person{grid-column:2 / -1;align-items:flex-start;gap:10px}.permissions-status{grid-column:2;justify-content:flex-start}.permissions-role{grid-column:3}.permissions-footer{padding:14px 16px}}
+@media(max-width:640px){.permissions-heading{align-items:flex-start;flex-direction:column;gap:6px}.permissions-table-heading{padding:18px 16px 0}.permissions-filters{padding:14px 16px 16px;gap:8px}.permissions-search{flex-basis:100%;min-width:0}.permissions-filters>.permissions-department{flex-basis:100%;min-width:0;width:100%}.permissions-filters>select{flex:1;min-width:0;width:auto}.permissions-table-head{display:none}.permissions-row{grid-template-columns:24px minmax(0,1fr) 120px;gap:12px;padding:14px 16px}.permissions-index{grid-column:1;grid-row:1 / span 2;align-self:start;padding-top:3px}.permissions-person{grid-column:2 / -1;align-items:flex-start;gap:10px}.permissions-status{grid-column:2;justify-content:flex-start}.permissions-role{grid-column:3}.permissions-footer{padding:14px 16px}}
 @media(max-width:360px){.permissions-row{grid-template-columns:24px minmax(0,1fr) 106px}.permissions-overview{gap:12px}}
 </style>
