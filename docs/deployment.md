@@ -81,6 +81,8 @@ git pull --ff-only origin main
 docker compose build api && docker compose build frontend && docker compose up -d --wait --wait-timeout 180
 ```
 
+这台服务器首次更新时，若 `git pull` 提示 Dockerfile 有未提交改动，先运行 `git diff -- backend/Dockerfile frontend/Dockerfile`。确认差异仅为此前临时添加的国内依赖镜像源后，执行 `git restore -- backend/Dockerfile frontend/Dockerfile`，再重新运行更新命令；正式版本已包含相同的镜像源配置。
+
 修改 `.env` 后用 `docker compose up -d --force-recreate --wait --wait-timeout 180` 重建容器以加载配置；无需重新构建镜像。若更新含数据库结构变更，先 `docker compose stop api worker`，手动执行新增 SQL，再启动。
 
 只改前端时，在拉取代码后执行：
