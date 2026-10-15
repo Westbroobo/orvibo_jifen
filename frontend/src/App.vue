@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
 import { unionSelection } from './types'
+import { displayRoleName } from './roles'
 import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
 import PersonMultiSelect from './components/PersonMultiSelect.vue'
 import CardPreview from './components/CardPreview.vue'
@@ -384,7 +385,7 @@ async function confirmRecall() {
         <div class="account-panel" aria-label="当前账号">
           <div class="account-identity">
             <EmployeeAvatar :src="user.avatar_url" :name="user.name" size="small" />
-            <div class="account-details"><strong class="account-name" :title="user.name">{{ user.name }}</strong><span class="account-role">{{ user.role_name }}</span></div>
+            <div class="account-details"><strong class="account-name" :title="user.name">{{ user.name }}</strong><span class="account-role">{{ displayRoleName(user.role, user.role_name) }}</span></div>
           </div>
           <div class="account-actions"><button type="button" class="logout-button" :disabled="busy" aria-label="退出登录" title="退出登录" @click="logout"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 5H5v14h4M14 8l4 4-4 4M9 12h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg><span>退出</span></button></div>
         </div>
@@ -393,7 +394,6 @@ async function confirmRecall() {
     <div v-if="error" class="feedback error" role="alert">{{ error }}<button type="button" aria-label="关闭提示" @click="error = ''">×</button></div>
     <div v-if="notice" ref="noticeBar" class="feedback success" role="status" @mouseenter="pauseNotice" @mouseleave="resumeNotice">{{ notice }}<button type="button" aria-label="关闭提示" @click="notice = ''">×</button></div>
     <div v-if="user?.demo_mode" class="demo-banner">本地演示 · 使用虚拟人员，通知仅模拟发送</div>
-    <div v-if="user?.owner_notice && page !== 'admin'" class="demo-banner" role="status">{{ user.owner_notice }}</div>
     <section v-if="!ready" class="panel login-panel"><h1>{{ redirectingToFeishu ? '正在前往飞书授权…' : '正在加载员工积分系统' }}</h1></section>
     <section v-else-if="!user" class="panel login-panel"><h1>{{ error ? '暂时无法进入系统' : '已退出登录' }}</h1><p v-if="!error">需要继续使用时，请授权飞书账号。</p><a class="primary-button" href="/api/auth/login">{{ error ? '重新授权飞书账号' : '使用飞书账号授权' }}</a><button v-if="demoAvailable" type="button" :disabled="busy" @click="action(async () => { await api('/auth/demo', 'POST'); await initialize() })">进入本地演示</button></section>
     <section v-else-if="!authorized" class="panel login-panel"><h1>当前账号暂无操作权限</h1><p>请联系管理员分配积分操作权限。{{ user.status === 'unknown' ? '人员目录尚待同步核实。' : '' }}</p><button type="button" :disabled="busy" @click="action(initialize)">重新检查权限</button></section>
