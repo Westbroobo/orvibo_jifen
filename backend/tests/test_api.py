@@ -31,16 +31,17 @@ def login(client, factory, employee_id="admin"):
     return {"X-CSRF-Token": "csrf-" + employee_id}
 
 
-def test_csrf_permissions_and_last_admin(client, factory):
+def test_csrf_permissions_and_retired_role_endpoint(client, factory):
     assert client.get("/api/directory").status_code == 401
     headers = login(client, factory)
     assert client.get("/api/directory").status_code == 200
     assert client.put("/api/admin/people/a/role", json={"role": "operator"}).status_code == 403
-    assert client.put("/api/admin/people/admin/role", json={"role": "none"}, headers=headers).status_code == 409
-    assert client.put("/api/admin/people/a/role", json={"role": "operator"}, headers=headers).status_code == 200
+    assert client.put("/api/admin/people/admin/role", json={"role": "none"}, headers=headers).status_code == 410
+    assert client.put("/api/admin/people/a/authorization", json={"role": "operator"}, headers=headers).status_code == 200
     with factory.begin() as db:
         db.get(Employee, "admin").role = "none"
-    assert client.get("/api/directory").status_code == 403
+    assert client.get("/api/directory").status_code == 200
+    assert client.get("/api/balances").status_code == 403
     assert client.get("/api/auth/me").json()["role"] == "none"
 
 
@@ -78,7 +79,8 @@ def test_oauth_login_does_not_grant_role(client, factory, monkeypatch):
     assert "HttpOnly" in response.headers["set-cookie"]
     assert "token=" not in response.headers["location"]
     assert client.get("/api/auth/me").json()["role"] == "none"
-    assert client.get("/api/directory").status_code == 403
+    assert client.get("/api/directory").status_code == 200
+    assert client.get("/api/adjustments").status_code == 403
 
 
 def test_sync_schedule_admin_only_and_csrf(client, factory):

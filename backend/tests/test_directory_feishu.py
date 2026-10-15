@@ -49,11 +49,11 @@ def test_bootstrap_admins_match_user_ids_and_only_initialize_once(factory, setti
         apply_directory(db, [], users, settings)
     with factory.begin() as db:
         assert db.get(Employee, "a").user_id == "staff_a"
-        assert db.get(Employee, "a").role == "admin"
-        assert db.get(Employee, "b").role == "admin"
+        assert db.get(Employee, "a").role == "owner"
+        assert db.get(Employee, "b").role == "owner"
         other = db.scalar(select(Employee).where(Employee.open_id == "staff_a"))
         assert other.role == "none"
-        assert db.get(SystemState, 1).bootstrap_done
+        assert db.get(SystemState, 1).owner_bootstrap_done
         assert len(list(db.scalars(select(PermissionAudit)))) == 2
         # Later permission changes must not be undone by another directory sync.
         db.get(Employee, "b").role = "none"
@@ -61,7 +61,7 @@ def test_bootstrap_admins_match_user_ids_and_only_initialize_once(factory, setti
     with factory.begin() as db:
         apply_directory(db, [], users, settings)
     with factory() as db:
-        assert db.get(Employee, "a").role == "admin"
+        assert db.get(Employee, "a").role == "owner"
         assert db.get(Employee, "b").role == "none"
         assert db.scalar(select(Employee).where(Employee.open_id == "staff_a")).role == "none"
         assert len(list(db.scalars(select(PermissionAudit)))) == 2
@@ -81,15 +81,15 @@ def test_bootstrap_waits_for_matching_active_user_id(factory, settings, configur
         apply_directory(db, [], [user], settings)
     with factory() as db:
         assert db.get(Employee, "a").role == "none"
-        assert not db.get(SystemState, 1).bootstrap_done
+        assert not db.get(SystemState, 1).owner_bootstrap_done
         assert not list(db.scalars(select(PermissionAudit)))
     # Once the configured person is available and active, initialization can finish.
     user.update(user_id=configured_id, status={"is_resigned": False})
     with factory.begin() as db:
         apply_directory(db, [], [user], settings)
     with factory() as db:
-        assert db.get(Employee, "a").role == "admin"
-        assert db.get(SystemState, 1).bootstrap_done
+        assert db.get(Employee, "a").role == "owner"
+        assert db.get(SystemState, 1).owner_bootstrap_done
 
 
 def test_feishu_template_and_uuid_contract(settings):

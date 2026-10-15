@@ -12,6 +12,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, signa
     })
     const data = await response.json().catch(e => { if (requestSignal.aborted) throw e; return {} })
     if (!response.ok) {
+      if (response.status === 403 && path !== '/auth/me') window.dispatchEvent(new Event('permissions-denied'))
       const detail = Array.isArray(data.detail) ? data.detail.map((d: { msg: string }) => d.msg).join('；') : data.detail
       throw new ApiError(detail || '请求失败，请稍后重试', response.status)
     }
@@ -28,6 +29,7 @@ export async function downloadFile(path: string, filename: string, signal: Abort
   try {
     const response = await fetch(`/api${path}`, { credentials: 'same-origin', signal: AbortSignal.any([signal, timeout]) })
     if (!response.ok) {
+      if (response.status === 403) window.dispatchEvent(new Event('permissions-denied'))
       const data = await response.json().catch(() => ({}))
       const detail = Array.isArray(data.detail) ? data.detail.map((d: { msg: string }) => d.msg).join('；') : data.detail
       throw new ApiError(detail || '导出失败，请稍后重试', response.status)

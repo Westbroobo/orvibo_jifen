@@ -8,11 +8,12 @@ from sqlalchemy import inspect, select
 from .db import lock_state
 from .models import (Balance, Batch, Delivery, Department, Employee, Ledger,
                      LedgerCancellation, Membership, MessageRecall, PermissionAudit,
-                     Preset, Preview, Session, SystemState)
+                     Preset, Preview, Role, Session, SystemState)
 
 
 # 关联字段使用普通索引/主键查询。预览可过期清理，批次保存完整快照。
 REFERENCES = {
+    Employee: {"role": Role},
     Membership: {"employee_id": Employee, "department_id": Department},
     Preset: {"owner_id": Employee},
     Balance: {"employee_id": Employee},
@@ -27,12 +28,16 @@ REFERENCES = {
 }
 RETAINED = {Employee, Department, Balance, Batch, Ledger, Delivery,
             LedgerCancellation, MessageRecall, PermissionAudit}
-PARENT_LABELS = {Employee: "员工", Department: "部门", Batch: "操作批次",
+PARENT_LABELS = {Role: "角色", Employee: "员工", Department: "部门", Batch: "操作批次",
                  Ledger: "积分流水", Delivery: "消息记录"}
 
 
 def validate_changes(db):
     for row in db.deleted:
+        if isinstance(row, Role):
+            lock_state(db)
+            if row.id in {"owner", "admin", "operator", "none"} or db.scalar(select(Employee.id).where(Employee.role == row.id).limit(1)):
+                raise HTTPException(409, "内置角色或有员工使用的角色不可删除")
         if type(row) in RETAINED:
             raise HTTPException(409, "人员、部门和业务历史不可删除，请使用状态变更或撤回")
     required = defaultdict(set)
@@ -68,6 +73,8 @@ def guard_bulk_write(execution):
     table = getattr(execution.statement, "table", None)
     table_name = getattr(table, "name", None)
     if execution.is_delete:
+        if table_name == Role.__tablename__:
+            raise HTTPException(409, "角色须通过角色管理逐条删除")
         if table_name in {model.__tablename__ for model in RETAINED}:
             raise HTTPException(409, "人员、部门和业务历史不可删除，请使用状态变更或撤回")
     elif table_name in {model.__tablename__ for model in REFERENCES} | {Employee.__tablename__, Department.__tablename__}:

@@ -17,7 +17,7 @@ openssl rand -hex 32
 nano .env
 ```
 
-将生成的随机值填写到 `SESSION_SECRET`；按中文注释填好数据库、飞书应用及初始管理员。正式地址使用：
+将生成的随机值填写到 `SESSION_SECRET`；按中文注释填好数据库、飞书应用及初始系统所有者。正式地址使用：
 
 ```dotenv
 PUBLIC_URL=https://jifen.orvibo.com
@@ -69,7 +69,7 @@ curl -fsS https://jifen.orvibo.com/api/health
 
 健康接口应与本机检查一致。若本机正常、域名仍返回 502，先查看 `docker compose logs --tail=100 frontend`，并用 `tcpdump -nn -i any 'tcp dst port 8888'` 检查网关回源；不要将端口改成仅绑定 `127.0.0.1`。
 
-用初始管理员的飞书账号登录，核对首次人员同步和权限；用测试通知名单检查加分、扣分卡片及发送记录中的消息 ID。
+用初始系统所有者的飞书账号登录，核对首次人员同步和权限；用测试通知名单检查加分、扣分卡片及发送记录中的消息 ID。
 
 ## 更新及排查
 

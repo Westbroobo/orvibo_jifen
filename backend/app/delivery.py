@@ -6,6 +6,7 @@ from sqlalchemy import or_, select
 from .db import lock_state, new_id, now_utc
 from .feishu import FeishuError
 from .models import Batch, Delivery, Employee, Ledger
+from .permissions import require_batch_operation
 
 
 # A margin avoids retrying on the boundary of Feishu's one-hour UUID window.
@@ -87,8 +88,7 @@ def retry_delivery(db, delivery_id, user, when=None):
     batch = db.get(Batch, ledger.batch_id) if ledger else None
     if not batch:
         raise HTTPException(409, "关联积分流水或操作批次缺失，请核实记录")
-    if user.role != "admin" and batch.operator_id != user.id:
-        raise HTTPException(404, "通知记录不存在")
+    user = require_batch_operation(db, user.id, batch, "history.retry")
     if delivery.status != "failed" or delivery.uncertain:
         raise HTTPException(409, "只允许重试明确失败的通知；成功或待核实通知不可重发")
     recipient = db.get(Employee, delivery.recipient_id)

@@ -12,7 +12,8 @@ from sqlalchemy import delete, select
 from .config import get_settings
 from .db import get_db, lock_state, now_utc
 from .feishu import FeishuClient, FeishuError
-from .models import Employee, LoginState, Session
+from .models import Employee, LoginState, Session, SystemState
+from .permissions import require_active, require_permission, require_manager, user_capabilities, bootstrap_owners, owner_notice
 
 router = APIRouter(prefix="/api/auth")
 settings = get_settings()
@@ -41,16 +42,21 @@ def current_user(request: Request, db=Depends(get_db)):
     return user
 
 
-def operator(user=Depends(current_user)):
-    if user.status != "active" or user.role not in {"admin", "operator"}:
-        raise HTTPException(403, "当前账号没有操作权限")
-    return user
+def active(user=Depends(current_user), db=Depends(get_db)):
+    return require_active(db, user.id)
 
 
-def admin(user=Depends(operator)):
-    if user.role != "admin":
-        raise HTTPException(403, "仅管理员可操作")
-    return user
+def permission(name):
+    def check(user=Depends(current_user), db=Depends(get_db)):
+        return require_permission(db, user.id, name)
+    return check
+
+
+operator = permission("adjustments.write")
+
+
+def admin(user=Depends(current_user), db=Depends(get_db)):
+    return require_manager(db, user.id)
 
 
 def session_response(db, user, response=None):
@@ -118,10 +124,17 @@ def callback(request: Request, state: str = "", code: str = "", error: str = "",
 
 
 @router.get("/me")
-def me(request: Request, user=Depends(current_user)):
+def me(request: Request, user=Depends(current_user), db=Depends(get_db)):
+    state = db.get(SystemState, 1)
+    if state and not state.owner_bootstrap_done and settings.bootstrap_admins:
+        state = lock_state(db)
+        db.refresh(state)
+        bootstrap_owners(db, settings, state)
+        db.commit()
+        db.refresh(user)
     return {"id": user.id, "name": user.name, "role": user.role, "status": user.status,
             "avatar_url": user.avatar_url, "csrf_token": request.state.session.csrf_token,
-            "demo_mode": settings.demo_mode}
+            "demo_mode": settings.demo_mode, **user_capabilities(db, user), "owner_notice": owner_notice(db, settings)}
 
 
 @router.post("/logout")

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from .cards import department_text, template_card
 from .db import lock_state, now_utc
 from .directory import employee_views, resolve_selection
-from .models import Balance, Batch, Delivery, Employee, Ledger, Preview
+from .models import Balance, Batch, Delivery, Ledger, Preview
 from .schemas import AdjustmentRequest
 
 
@@ -18,10 +18,8 @@ def month_at(when):
 
 
 def require_operator(db, user_id):
-    user = db.get(Employee, user_id, populate_existing=True)
-    if not user or user.status != "active" or user.role not in {"admin", "operator"}:
-        raise HTTPException(403, "当前账号没有操作权限或人员状态不可用")
-    return user
+    from .permissions import require_permission
+    return require_permission(db, user_id, "adjustments.write")
 
 
 def build_snapshot(db, user, request: AdjustmentRequest, settings, when):

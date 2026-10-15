@@ -2,7 +2,7 @@ from sqlalchemy import delete, select
 
 from .config import get_settings
 from .db import lock_state, now_utc
-from .models import Department, Employee, EventReceipt, Membership, PermissionAudit
+from .models import Department, Employee, EventReceipt, Membership
 from .schemas import Selection
 from .sync_schedule import release_sync_claim
 
@@ -151,16 +151,8 @@ def apply_directory(db, departments, users, settings=None, expected_version=None
     for open_id, employee in existing.items():
         if open_id not in seen and employee.status != "resigned":
             employee.status = "unknown"
-    if not state.bootstrap_done:
-        by_user_id = {e.user_id: e for e in existing.values() if e.user_id}
-        for user_id in settings.bootstrap_admins:
-            employee = by_user_id.get(user_id)
-            if employee and employee.status == "active" and employee.role != "admin":
-                db.add(PermissionAudit(employee_id=employee.id, old_role=employee.role, new_role="admin"))
-                employee.role = "admin"
-        state.bootstrap_done = bool(settings.bootstrap_admins) and all(
-            i in by_user_id and by_user_id[i].status == "active" for i in settings.bootstrap_admins
-        )
+    from .permissions import bootstrap_owners
+    bootstrap_owners(db, settings, state)
     state.directory_version += 1
     state.last_sync_at = now_utc()
     state.last_sync_error = None

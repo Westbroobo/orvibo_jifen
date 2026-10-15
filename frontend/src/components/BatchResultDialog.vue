@@ -23,7 +23,7 @@ const messages = computed(() => props.detail.deliveries.map(delivery => ({
   sent: delivery.sent_at ? recordTime(delivery.sent_at) : null,
   expired: delivery.status === 'sent' && !delivery.recall_status && !!delivery.recall_deadline && new Date(delivery.recall_deadline).getTime() <= props.clock,
 })))
-const hasRetry = computed(() => messages.value.some(message => message.delivery.status === 'failed' && !message.delivery.recall_status))
+const hasRetry = computed(() => props.detail.can_retry && messages.value.some(message => message.delivery.status === 'failed' && !message.delivery.recall_status))
 watch(() => props.detail.id, async () => { await nextTick(); if (body.value) body.value.scrollTop = 0 })
 watch(() => props.detail.page, async () => { await nextTick(); if (deliveries.value) deliveries.value.scrollTop = 0 })
 function trapFocus(event: KeyboardEvent) {
@@ -79,7 +79,7 @@ defineExpose({ focusClose: () => closeButton.value?.focus({ preventScroll: true 
           <div v-if="detail.total > 100" class="batch-delivery-pagination"><span>显示 {{ (detail.page - 1) * 100 + 1 }}–{{ Math.min(detail.page * 100, detail.total) }} / {{ detail.total }} 条</span><div class="pagination"><button type="button" :disabled="busy || detail.page <= 1" @click="emit('change-page', detail.page - 1)">上一页</button><span>{{ detail.page }} / {{ Math.ceil(detail.total / 100) }}</span><button type="button" :disabled="busy || detail.page * 100 >= detail.total" @click="emit('change-page', detail.page + 1)">下一页</button></div></div>
         </section>
       </div>
-      <footer class="batch-result-footer"><span>{{ detail.recall_available ? `${detail.recall_available} 条卡片可撤回` : '无可撤回卡片' }}</span><div><button type="button" :disabled="busy" @click="emit('refresh')">刷新结果</button><button v-if="detail.recall_available" type="button" class="recall-button" :disabled="busy" @click="emit('recall', detail)">整批撤回</button></div></footer>
+      <footer class="batch-result-footer"><span>{{ detail.recall_available ? `${detail.recall_available} 条卡片可撤回` : '无可撤回卡片' }}</span><div><button type="button" :disabled="busy" @click="emit('refresh')">刷新结果</button><button v-if="detail.can_recall && detail.recall_available" type="button" class="recall-button" :disabled="busy" @click="emit('recall', detail)">整批撤回</button></div></footer>
     </section>
   </div>
 </template>

@@ -1,6 +1,6 @@
 # 飞书应用配置与联调
 
-使用同一企业自建应用完成登录、通讯录和机器人发送。初始管理员通过 `INITIAL_ADMIN_USER_IDS` 配置飞书 user_id，多个用英文逗号分隔；登录和消息发送所需的 open_id 由系统从当前应用同步获取。
+使用同一企业自建应用完成登录、通讯录和机器人发送。初始系统所有者通过 `INITIAL_ADMIN_USER_IDS` 配置飞书 user_id，多个用英文逗号分隔；登录和消息发送所需的 open_id 由系统从当前应用同步获取。
 
 ## 应用后台
 
@@ -20,7 +20,7 @@
 - `contact:department.base:readonly`：部门名称和 ID。
 - `contact:department.organize:readonly`：部门父子组织关系。
 - `contact:user.base:readonly`：姓名、头像和基本信息。
-- `contact:user.employee_id:readonly`：获取用户 user ID，用于匹配初始管理员。
+- `contact:user.employee_id:readonly`：获取用户 user ID，用于匹配初始系统所有者。
 - `contact:user.department:readonly`：人员所在部门列表。
 - `contact:user.employee:readonly`：人员在职、离职等状态。
 
@@ -52,7 +52,7 @@
 ## 联调顺序
 
 1. 手动执行 `database/schema.sql`（已有数据库仅执行新增增量段），再启动 API 和 worker；在 worker 日志确认全量同步完成。
-2. 使用 `INITIAL_ADMIN_USER_IDS` 中对应的飞书账号登录，确认有管理员身份；该配置只用于初始化，已有管理员权限不会因修改配置而重置。
+2. 使用 `INITIAL_ADMIN_USER_IDS` 中对应的在职飞书账号登录，确认系统所有者身份；独立一次性初始化，后续在权限管理内任免，不随人员同步恢复授权。
 3. 在权限管理页核对部门路径、多部门归属和在职状态，给另一个测试账号分配操作员。
 4. 使用测试人员和单个测试通知对象，分别检查加分、扣分模板；核对网页预览和真实卡片变量、总分。
 5. 检查发送记录包含真实 `om_...` message ID。

@@ -4,7 +4,7 @@ from datetime import timedelta
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 
-from .adjustments import require_operator
+from .permissions import require_permission, require_batch_operation
 from .cancellations import cancel_score
 from .db import lock_state, new_id, now_utc
 from .feishu import FeishuError
@@ -80,15 +80,14 @@ def cancel_if_fully_recalled(db, ledger, actor_id, when, *, source="recall"):
 def request_recall(db, user_id, *, delivery_id=None, batch_id=None, when=None):
     when = when or now_utc()
     lock_state(db)
-    user = require_operator(db, user_id)
+    user = require_permission(db, user_id, "history.recall")
     if delivery_id:
         delivery = db.get(Delivery, delivery_id)
         ledger = db.get(Ledger, delivery.ledger_id) if delivery else None
         batch = db.get(Batch, ledger.batch_id) if ledger else None
     else:
         batch = db.get(Batch, batch_id)
-    if not batch or user.role != "admin" and batch.operator_id != user.id:
-        raise HTTPException(404, "操作记录不存在")
+    user = require_batch_operation(db, user_id, batch, "history.recall")
     if delivery_id:
         accepted = int(enqueue_recall(db, delivery, user, when))
     else:

@@ -209,7 +209,7 @@ def main():
         if sys.version_info < (3, 13):
             raise RuntimeError("请使用 Python 3.13：py -3.13 scripts\\start-local.py")
         if not (ROOT / ".env").is_file():
-            raise RuntimeError("请先将 .env.example 复制为 .env，填写数据库、飞书和初始管理员配置。")
+            raise RuntimeError("请先将 .env.example 复制为 .env，填写数据库、飞书和初始系统所有者配置。")
         env = {**os.environ, "APP_ENV": "development", "COOKIE_SECURE": "false", "DEMO_MODE": "false",
                "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1", "DEV_API_PORT": str(args.api_port)}
         python, node = prepare_dependencies(env)

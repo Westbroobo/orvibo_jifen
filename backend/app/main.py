@@ -5,14 +5,16 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import func, select
 
 from . import auth
-from .adjustments import commit_preview, create_preview, month_at, require_operator
+from .adjustments import commit_preview, create_preview, month_at
 from .config import get_settings
 from .db import get_db, lock_state, now_utc
 from .delivery import retry_delivery
-from .directory import employee_views, in_selection_path, resolve_selection
-from .models import Balance, Batch, Delivery, Employee, Ledger, MessageRecall, PermissionAudit, SystemState
+from .directory import employee_views, resolve_selection
+from .models import Balance, Batch, Delivery, Ledger, MessageRecall, SystemState
 from .presets import router as presets_router
 from .score_ledgers import router as score_ledgers_router
+from .authorization import router as authorization_router
+from .permissions import history_visible, can_operate_batch, require_permission, require_manager, is_manager
 from .recall import can_recall, recall_deadline, recall_summary, request_recall
 from .schemas import AdjustmentRequest, CommitRequest, RoleRequest, Selection, SyncScheduleRequest
 from .sync_schedule import first_sync_at, schedule_view
@@ -30,6 +32,7 @@ app = FastAPI(title="ORVIBO_员工积分系统", version="1.0.0", lifespan=lifes
 app.include_router(auth.router)
 app.include_router(presets_router)
 app.include_router(score_ledgers_router)
+app.include_router(authorization_router)
 
 
 @app.middleware("http")
@@ -54,7 +57,7 @@ def public_config():
 
 
 @app.get("/api/directory")
-def directory(user=Depends(auth.operator), db=Depends(get_db)):
+def directory(user=Depends(auth.active), db=Depends(get_db)):
     from .models import Department
     state = db.get(SystemState, 1)
     return {"people": employee_views(db),
@@ -67,13 +70,13 @@ def directory(user=Depends(auth.operator), db=Depends(get_db)):
 
 
 @app.get("/api/people")
-def people(q: str = "", include_unavailable: bool = False, user=Depends(auth.operator), db=Depends(get_db)):
+def people(q: str = "", include_unavailable: bool = False, user=Depends(auth.active), db=Depends(get_db)):
     return [p for p in employee_views(db) if q.strip().casefold() in p["name"].casefold()
-            and (include_unavailable and user.role == "admin" or p["status"] == "active")]
+            and (include_unavailable and is_manager(user) or p["status"] == "active")]
 
 
 @app.post("/api/ranges/resolve")
-def resolve(selection: Selection, user=Depends(auth.operator), db=Depends(get_db)):
+def resolve(selection: Selection, user=Depends(auth.active), db=Depends(get_db)):
     return resolve_selection(db, selection)
 
 
@@ -101,15 +104,15 @@ def confirm(body: CommitRequest, user=Depends(auth.operator), db=Depends(get_db)
 
 def accessible_batch(db, batch_id, user):
     batch = db.get(Batch, batch_id)
-    if not batch or user.role != "admin" and batch.operator_id != user.id:
+    if not batch or not history_visible(user, batch):
         raise HTTPException(404, "操作记录不存在")
     return batch
 
 
 @app.get("/api/adjustments")
-def history(page: int = Query(1, ge=1), user=Depends(auth.operator), db=Depends(get_db)):
+def history(page: int = Query(1, ge=1), user=Depends(auth.permission("history.read")), db=Depends(get_db)):
     statement = select(Batch)
-    if user.role != "admin":
+    if user.role != "owner" and user.history_scope != "all":
         statement = statement.where(Batch.operator_id == user.id)
     total = db.scalar(select(func.count()).select_from(statement.subquery()))
     result = []
@@ -122,12 +125,14 @@ def history(page: int = Query(1, ge=1), user=Depends(auth.operator), db=Depends(
                        "names": [r["person"]["name"] for r in batch.snapshot["rows"]],
                        "message_count": batch.snapshot["message_count"], "statuses": dict(Counter(statuses)),
                        "recall_statuses": summary["statuses"], "recall_available": summary["available"],
-                       "cancelled_scores": summary["cancelled_scores"]})
+                       "cancelled_scores": summary["cancelled_scores"],
+                       "can_recall": can_operate_batch(db, user, batch, "history.recall"),
+                       "can_retry": can_operate_batch(db, user, batch, "history.retry")})
     return {"items": result, "total": total, "page": page}
 
 
 @app.get("/api/adjustments/{batch_id}")
-def batch_detail(batch_id: str, page: int = Query(1, ge=1), user=Depends(auth.operator), db=Depends(get_db)):
+def batch_detail(batch_id: str, page: int = Query(1, ge=1), user=Depends(auth.permission("history.read")), db=Depends(get_db)):
     batch = accessible_batch(db, batch_id, user)
     base = select(Delivery, Ledger.employee_id, MessageRecall).join(Ledger, Delivery.ledger_id == Ledger.id).outerjoin(
         MessageRecall, MessageRecall.delivery_id == Delivery.id).where(Ledger.batch_id == batch.id)
@@ -135,6 +140,8 @@ def batch_detail(batch_id: str, page: int = Query(1, ge=1), user=Depends(auth.op
     rows = []
     when = now_utc()
     summary = recall_summary(db, batch.id, when)
+    allow_recall = can_operate_batch(db, user, batch, "history.recall")
+    allow_retry = can_operate_batch(db, user, batch, "history.retry")
     for delivery, person_id, recall in db.execute(base.order_by(Delivery.recipient_name, Delivery.id).offset((page - 1) * 100).limit(100)):
         rows.append({"id": delivery.id, "person_id": person_id, "recipient_name": delivery.recipient_name,
                      "status": delivery.status, "attempts": delivery.attempts, "message_id": delivery.message_id,
@@ -144,31 +151,32 @@ def batch_detail(batch_id: str, page: int = Query(1, ge=1), user=Depends(auth.op
                      "recall_error": recall.last_error if recall else None,
                      "recalled_at": recall.recalled_at.isoformat() + "Z" if recall and recall.recalled_at else None,
                      "recall_deadline": recall_deadline(delivery).isoformat() + "Z" if recall_deadline(delivery) else None,
-                     "can_recall": can_recall(delivery, recall, when)})
+                     "can_recall": allow_recall and can_recall(delivery, recall, when)})
     return {"id": batch.id, "snapshot": batch.snapshot, "created_at": batch.created_at.isoformat() + "Z",
             "deliveries": rows, "statuses": dict(Counter(statuses)), "total": len(statuses), "page": page,
             "recall_statuses": summary["statuses"], "recall_available": summary["available"],
-            "cancelled_scores": summary["cancelled_scores"], "scores": summary["scores"]}
+            "cancelled_scores": summary["cancelled_scores"], "scores": summary["scores"],
+            "can_recall": allow_recall, "can_retry": allow_retry}
 
 
 @app.post("/api/adjustments/{batch_id}/recall", status_code=202)
-def recall_batch(batch_id: str, user=Depends(auth.operator), db=Depends(get_db)):
+def recall_batch(batch_id: str, user=Depends(auth.permission("history.recall")), db=Depends(get_db)):
     result = request_recall(db, user.id, batch_id=batch_id)
     db.commit()
     return result
 
 
 @app.post("/api/deliveries/{delivery_id}/recall", status_code=202)
-def recall_delivery(delivery_id: str, user=Depends(auth.operator), db=Depends(get_db)):
+def recall_delivery(delivery_id: str, user=Depends(auth.permission("history.recall")), db=Depends(get_db)):
     result = request_recall(db, user.id, delivery_id=delivery_id)
     db.commit()
     return result
 
 
 @app.post("/api/deliveries/{delivery_id}/retry")
-def retry(delivery_id: str, user=Depends(auth.operator), db=Depends(get_db)):
+def retry(delivery_id: str, user=Depends(auth.permission("history.retry")), db=Depends(get_db)):
     lock_state(db)
-    user = require_operator(db, user.id)
+    user = require_permission(db, user.id, "history.retry")
     retry_delivery(db, delivery_id, user)
     db.commit()
     return {"ok": True}
@@ -176,31 +184,13 @@ def retry(delivery_id: str, user=Depends(auth.operator), db=Depends(get_db)):
 
 @app.put("/api/admin/people/{person_id}/role")
 def update_role(person_id: str, body: RoleRequest, user=Depends(auth.admin), db=Depends(get_db)):
-    lock_state(db)
-    actor = require_operator(db, user.id)
-    if actor.role != "admin":
-        raise HTTPException(403, "仅管理员可操作")
-    target = db.get(Employee, person_id)
-    if not target:
-        raise HTTPException(404, "人员不存在")
-    if body.role != "none" and target.status != "active":
-        raise HTTPException(409, "只可为在职可用人员授权")
-    if target.role == "admin" and target.status == "active" and body.role != "admin":
-        count = db.scalar(select(func.count()).select_from(Employee).where(Employee.role == "admin", Employee.status == "active"))
-        if count <= 1:
-            raise HTTPException(409, "不能移除最后一名有效管理员")
-    if target.role != body.role:
-        db.add(PermissionAudit(actor_id=actor.id, employee_id=target.id, old_role=target.role, new_role=body.role))
-        target.role = body.role
-    db.commit()
-    return {"ok": True}
+    raise HTTPException(410, "授权接口已升级，请刷新页面后使用员工授权")
 
 
 @app.post("/api/admin/directory/sync")
 def request_sync(user=Depends(auth.admin), db=Depends(get_db)):
     state = lock_state(db)
-    if require_operator(db, user.id).role != "admin":
-        raise HTTPException(403, "仅管理员可操作")
+    require_manager(db, user.id)
     state.sync_requested = True
     state.sync_retry_at = None
     db.commit()
@@ -215,8 +205,7 @@ def get_sync_schedule(user=Depends(auth.admin), db=Depends(get_db)):
 @app.put("/api/admin/directory/schedule")
 def update_sync_schedule(body: SyncScheduleRequest, user=Depends(auth.admin), db=Depends(get_db)):
     state = lock_state(db)
-    if require_operator(db, user.id).role != "admin":
-        raise HTTPException(403, "仅管理员可操作")
+    require_manager(db, user.id)
     changed = (state.sync_enabled, state.sync_interval_days, state.sync_time) != (body.enabled, body.interval_days, body.time)
     state.sync_enabled = body.enabled
     state.sync_interval_days = body.interval_days

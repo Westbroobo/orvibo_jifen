@@ -6,7 +6,7 @@ import { recordTime } from '../historyPresentation'
 import DepartmentTreeSelect from './DepartmentTreeSelect.vue'
 import EmployeeAvatar from './EmployeeAvatar.vue'
 
-const props = defineProps<{ currentMonth: string }>()
+const props = defineProps<{ currentMonth: string; canExport: boolean }>()
 function currentMonth() {
   const parts = new Intl.DateTimeFormat('en', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).formatToParts(new Date())
   return `${parts.find(p => p.type === 'year')!.value}-${parts.find(p => p.type === 'month')!.value}`
@@ -32,7 +32,7 @@ function filterParams() {
     operation: operation.value, status: status.value })
 }
 async function exportExcel() {
-  if (exporting.value || loading.value || !data.value?.total) return
+  if (!props.canExport || exporting.value || loading.value || !data.value?.total) return
   const request = new AbortController()
   exportRequest = request; exporting.value = true; exportError.value = ''
   try {
@@ -106,7 +106,7 @@ onUnmounted(() => {
 
 <template>
   <main class="ledger-page" aria-label="积分明细">
-    <header class="ledger-heading"><h1 class="panel-title">积分明细</h1><div class="ledger-actions"><button type="button" class="ledger-export" :disabled="loading || exporting || !data?.total" title="导出当前筛选条件下的全部明细" @click="exportExcel"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 12v5h14v-5" /></svg>{{ exporting ? '导出中…' : '导出 Excel' }}</button><button type="button" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新' }}</button></div></header>
+    <header class="ledger-heading"><h1 class="panel-title">积分明细</h1><div class="ledger-actions"><button v-if="canExport" type="button" class="ledger-export" :disabled="loading || exporting || !data?.total" title="导出当前筛选条件下的全部明细" @click="exportExcel"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 12v5h14v-5" /></svg>{{ exporting ? '导出中…' : '导出 Excel' }}</button><button type="button" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新' }}</button></div></header>
     <div v-if="exportError" class="ledger-error ledger-export-error" role="alert">{{ exportError }}<button type="button" :disabled="loading || exporting || !data?.total" @click="exportExcel">重试导出</button></div>
     <div class="ledger-summary" aria-live="polite">
       <div><span>记录数</span><b>{{ loading || !data ? '—' : data.total }}<small> 笔</small></b></div>

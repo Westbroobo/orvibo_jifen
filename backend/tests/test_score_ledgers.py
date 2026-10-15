@@ -65,7 +65,7 @@ def test_snapshot_departments_names_and_owner_scope(factory, settings, when):
     assert result["items"][0]["operator_name"] == "操作员"
     assert result["items"][0]["reason"] == request().reason
     assert result["items"][0]["paths"][0]["names"] == ["研发", "软件", "平台"]
-    assert next(d for d in result["departments"] if d["id"] == "team")["name"] == "平台"
+    assert next(d for d in result["departments"] if d["id"] == "team")["name"] == "平台（已停用）"
     assert read(factory, q="新姓名")["total"] == 0
     assert read(factory, user="operator", department_id="sales")["total"] == 1
     assert read(factory, user="operator")["total"] == 2

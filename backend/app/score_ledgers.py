@@ -12,12 +12,13 @@ from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font, PatternFill
-from sqlalchemy import text
+from sqlalchemy import select, text
 from starlette.background import BackgroundTask
 
 from . import auth
 from .adjustments import month_at
 from .db import get_db, now_utc
+from .models import Department
 
 router = APIRouter(prefix="/api/score-ledgers", tags=["score-ledgers"])
 PAGE_SIZE = 20
@@ -41,7 +42,7 @@ JOIN JSON_TABLE(b.snapshot, '$.rows[*]' COLUMNS (
 JOIN orvibo_jifen_ledger l ON l.batch_id = b.id
     AND l.employee_id = p.person_id COLLATE utf8mb4_unicode_ci
 LEFT JOIN orvibo_jifen_ledger_cancellations c ON c.ledger_id = l.id
-WHERE b.month = :month AND (:is_admin = 1 OR b.operator_id = :operator_id)
+WHERE b.month = :month AND (:scope IN ('all', 'departments') OR (:scope = 'own' AND b.operator_id = :operator_id))
 """
 
 
@@ -50,8 +51,15 @@ def decode_paths(value):
 
 
 def ledger_filter(user, month, q="", department_id="", operation="all", status="all"):
-    params = {"month": month, "is_admin": int(user.role == "admin"), "operator_id": user.id,
+    scope = "all" if user.role == "owner" else user.ledger_scope
+    params = {"month": month, "scope": scope, "operator_id": user.id,
               "q": q.strip(), "department_id": department_id}
+    allowed = []
+    if scope == "departments":
+        for index, dept in enumerate(sorted(set(user.ledger_department_ids or []))):
+            params[f"allowed_{index}"] = dept
+            allowed.append(f"JSON_CONTAINS(JSON_EXTRACT(paths, '$[*].ids[*]'), JSON_QUOTE(:allowed_{index}))")
+    scope_sql = (" OR ".join(allowed) or "FALSE") if scope == "departments" else "TRUE"
     conditions = ["LOCATE(LOWER(:q), LOWER(person_name)) > 0"]
     if department_id:
         conditions.append("JSON_CONTAINS(JSON_EXTRACT(paths, '$[*].ids[*]'), JSON_QUOTE(:department_id))")
@@ -59,7 +67,7 @@ def ledger_filter(user, month, q="", department_id="", operation="all", status="
         conditions.append("delta > 0" if operation == "plus" else "delta < 0")
     if status != "all":
         conditions.append("cancelled_at IS NULL" if status == "valid" else "cancelled_at IS NOT NULL")
-    return f"WITH scoped AS ({BASE}), filtered AS (SELECT * FROM scoped WHERE {' AND '.join(conditions)})", params
+    return f"WITH original AS ({BASE}), scoped AS (SELECT * FROM original WHERE {scope_sql}), filtered AS (SELECT * FROM scoped WHERE {' AND '.join(conditions)})", params
 
 
 def query_ledgers(db, user, month, q="", department_id="", operation="all", status="all", page=1):
@@ -85,17 +93,20 @@ def query_ledgers(db, user, month, q="", department_id="", operation="all", stat
         items.append(row)
 
     # 只取去重后的历史路径，不把整个月的人员流水加载到应用内。
-    historical_paths = db.execute(text(f"""WITH scoped AS ({BASE})
+    historical_paths = db.execute(text(filtered + """
         SELECT CAST(paths AS CHAR) AS paths, MAX(created_at) AS latest
         FROM scoped GROUP BY CAST(paths AS CHAR) ORDER BY latest DESC, paths
     """), params).mappings()
     departments = {}
+    current = {d.id: d for d in db.scalars(select(Department))}
     for record in historical_paths:
         for path in decode_paths(record["paths"]):
             ids, names = path["ids"], path["names"]
+            if user.role != "owner" and user.ledger_scope == "departments" and not set(ids).intersection(user.ledger_department_ids or []):
+                continue
             for index, department in enumerate(ids):
                 departments.setdefault(department, {
-                    "id": department, "name": names[index], "parent_id": ids[index - 1] if index else "0",
+                    "id": department, "name": names[index] + ("（已停用）" if department not in current or not current[department].active else ""), "parent_id": ids[index - 1] if index else "0",
                     "path_ids": ids[:index + 1], "path_names": names[:index + 1],
                 })
     return {"items": items, "total": total, "page": page, "page_size": PAGE_SIZE, "month": month,
@@ -178,7 +189,7 @@ def export_score_ledgers(month: str | None = Query(None, pattern=r"^[0-9]{4}-(0[
                          q: str = Query("", max_length=200), department_id: str = Query("", max_length=100),
                          operation: Literal["all", "plus", "minus"] = "all",
                          status: Literal["all", "valid", "cancelled"] = "all",
-                         user=Depends(auth.operator), db=Depends(get_db)):
+                         user=Depends(auth.permission("ledgers.export")), db=Depends(get_db)):
     month = month or month_at(now_utc())
     file = export_workbook(db, user, month, q, department_id, operation, status)
     filename = quote(f"积分明细_{month}.xlsx")
@@ -192,5 +203,5 @@ def score_ledgers(month: str | None = Query(None, pattern=r"^[0-9]{4}-(0[1-9]|1[
                   q: str = Query("", max_length=200), department_id: str = Query("", max_length=100),
                   operation: Literal["all", "plus", "minus"] = "all",
                   status: Literal["all", "valid", "cancelled"] = "all",
-                  page: int = Query(1, ge=1), user=Depends(auth.operator), db=Depends(get_db)):
+                  page: int = Query(1, ge=1), user=Depends(auth.permission("ledgers.read")), db=Depends(get_db)):
     return query_ledgers(db, user, month or month_at(now_utc()), q, department_id, operation, status, page)

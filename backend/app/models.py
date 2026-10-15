@@ -23,7 +23,18 @@ class SystemState(Base):
     sync_lease_token: Mapped[str | None] = mapped_column(String(36), comment="当前组织同步任务的归属令牌，防止过期任务覆盖新状态")
     sync_lease_until: Mapped[datetime | None] = mapped_column(DateTime, comment="组织同步任务租约到期时间（UTC），运行期间续期，进程退出后自动失效")
     bootstrap_done: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已完成初始管理员权限初始化")
+    owner_bootstrap_done: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", comment="是否已完成独立的系统所有者初始化")
+    owner_bootstrap_ids: Mapped[list] = mapped_column(JSON, default=list, comment="已处理的初始所有者 user_id，防止同步重复恢复授权")
     events_connected_at: Mapped[datetime | None] = mapped_column(DateTime, comment="飞书事件长连接最近重连成功时间（UTC），断开时清空")
+
+
+class Role(Base):
+    __tablename__ = "orvibo_jifen_roles"
+    __table_args__ = {"comment": "系统角色及功能权限定义，管理身份由内置角色 ID 固定"}
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="角色 ID，内置 owner/admin/operator/none 或自定义 UUID")
+    name: Mapped[str] = mapped_column(String(100), unique=True, comment="角色名称，内置名称固定")
+    description: Mapped[str] = mapped_column(String(500), default="", comment="角色用途说明")
+    permissions: Mapped[list] = mapped_column(JSON, default=list, comment="功能权限标识数组，不包含管理身份")
 
 
 class Employee(Base):
@@ -35,7 +46,10 @@ class Employee(Base):
     name: Mapped[str] = mapped_column(String(200), comment="员工姓名")
     avatar_url: Mapped[str] = mapped_column(Text, default="", comment="员工头像地址")
     status: Mapped[str] = mapped_column(String(20), default="unknown", comment="人员状态：active 在职可用，resigned 离职，inactive 冻结或退出，unknown 待核实")
-    role: Mapped[str] = mapped_column(String(20), default="none", comment="系统角色：admin 管理员，operator 操作员，none 未授权")
+    role: Mapped[str] = mapped_column(String(36), default="none", comment="唯一角色 ID，应用层关联角色表，不使用外键")
+    history_scope: Mapped[str] = mapped_column(String(20), default="own", server_default="own", comment="发送记录范围：own 本人执行，all 全部")
+    ledger_scope: Mapped[str] = mapped_column(String(20), default="own", server_default="own", comment="积分明细范围：own 本人执行，departments 指定历史部门及下级，all 全部")
+    ledger_department_ids: Mapped[list] = mapped_column(JSON, default=list, comment="积分明细授权部门 ID 数组，多选合并去重")
     feishu_status: Mapped[dict] = mapped_column(JSON, default=dict, comment="飞书通讯录返回的原始人员状态")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="人员信息最近更新时间（UTC）")
 
@@ -194,10 +208,16 @@ class EventReceipt(Base):
 
 class PermissionAudit(Base):
     __tablename__ = "orvibo_jifen_permission_audit"
-    __table_args__ = {"comment": "员工权限变更审计记录"}
+    __table_args__ = (Index("ix_permission_audit_created", "created_at", "id"), Index("ix_permission_audit_target", "target_id", "created_at"), {"comment": "角色、员工授权及所有者变更审计，保留旧日志"})
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="权限变更记录 ID（UUID）")
     actor_id: Mapped[str | None] = mapped_column(String(36), comment="执行变更的管理员 ID，系统初始化授权时为空")
-    employee_id: Mapped[str] = mapped_column(String(36), comment="被变更权限的员工 ID")
-    old_role: Mapped[str] = mapped_column(String(20), comment="变更前角色：admin 管理员，operator 操作员，none 未授权")
-    new_role: Mapped[str] = mapped_column(String(20), comment="变更后角色：admin 管理员，operator 操作员，none 未授权")
+    employee_id: Mapped[str | None] = mapped_column(String(36), comment="被变更员工 ID，角色配置事件为空")
+    old_role: Mapped[str | None] = mapped_column(String(36), comment="旧角色 ID，兼容历史员工授权日志")
+    new_role: Mapped[str | None] = mapped_column(String(36), comment="新角色 ID，兼容历史员工授权日志")
+    event: Mapped[str] = mapped_column(String(30), default="employee", server_default="employee", comment="变更类别：employee 员工授权，role 角色配置，owner_init 初始所有者")
+    target_id: Mapped[str | None] = mapped_column(String(36), comment="变更对象 ID，员工或角色")
+    actor_name: Mapped[str | None] = mapped_column(String(200), comment="操作者姓名快照，系统初始化为空")
+    target_name: Mapped[str | None] = mapped_column(String(200), comment="变更对象名称快照")
+    before: Mapped[dict | None] = mapped_column(JSON, comment="修改前授权或角色定义快照")
+    after: Mapped[dict | None] = mapped_column(JSON, comment="修改后授权或角色定义快照")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="权限变更时间（UTC）")

@@ -528,3 +528,86 @@ END$$
 DELIMITER ;
 CALL orvibo_jifen_upgrade_presets();
 DROP PROCEDURE orvibo_jifen_upgrade_presets;
+
+-- =====================================================================
+-- 增量 2026-10-15（第八段）：角色功能、员工查看范围和权限审计
+-- 升级：停止 API/worker → 执行整个本段 → 启动新版。无需 Python 迁移。
+-- 可重复执行；保留已修改角色和员工授权，不增加外键。
+-- 现有管理员保留全部功能及全部范围，操作员保留功能及本人范围。
+-- INITIAL_ADMIN_USER_IDS 由新版应用独立、一次性初始化为系统所有者。
+-- =====================================================================
+SET NAMES utf8mb4;
+CREATE TABLE IF NOT EXISTS orvibo_jifen_roles (
+    id VARCHAR(36) NOT NULL COMMENT '角色 ID，内置 owner/admin/operator/none 或自定义 UUID',
+    name VARCHAR(100) NOT NULL COMMENT '角色名称，内置名称固定',
+    description VARCHAR(500) NOT NULL COMMENT '角色用途说明',
+    permissions JSON NOT NULL COMMENT '功能权限标识数组，不包含管理身份',
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_roles_name (name) COMMENT '角色名称唯一'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='系统角色及功能权限定义，管理身份由内置角色 ID 固定';
+
+INSERT IGNORE INTO orvibo_jifen_roles (id, name, description, permissions) VALUES
+('owner', '系统所有者', '全部能力；维护角色、授权及所有者', JSON_ARRAY('adjustments.write','history.read','history.recall','history.retry','history.others','ledgers.read','ledgers.export')),
+('admin', '管理员', '管理员工授权、公共名单及组织同步；功能由所有者配置', JSON_ARRAY('adjustments.write','history.read','history.recall','history.retry','history.others','ledgers.read','ledgers.export')),
+('operator', '操作员', '日常积分操作；查看范围按员工单独设置', JSON_ARRAY('adjustments.write','history.read','history.recall','history.retry','ledgers.read','ledgers.export')),
+('none', '普通员工', '查看公共名单，维护本人个人名单', JSON_ARRAY());
+
+DROP PROCEDURE IF EXISTS orvibo_jifen_upgrade_permissions;
+DELIMITER $$
+CREATE PROCEDURE orvibo_jifen_upgrade_permissions()
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='orvibo_jifen_employees' AND COLUMN_NAME='history_scope') THEN
+        ALTER TABLE orvibo_jifen_employees
+            ADD history_scope VARCHAR(20) NOT NULL DEFAULT 'own' COMMENT '发送记录范围：own 本人执行，all 全部',
+            ADD ledger_scope VARCHAR(20) NOT NULL DEFAULT 'own' COMMENT '积分明细范围：own 本人执行，departments 指定历史部门及下级，all 全部',
+            ADD ledger_department_ids JSON NULL COMMENT '积分明细授权部门 ID 数组，多选合并去重';
+        UPDATE orvibo_jifen_employees SET history_scope='all', ledger_scope='all' WHERE role='admin';
+        UPDATE orvibo_jifen_employees SET ledger_department_ids=JSON_ARRAY();
+    END IF;
+    ALTER TABLE orvibo_jifen_employees
+        MODIFY role VARCHAR(36) NOT NULL COMMENT '唯一角色 ID，应用层关联角色表，不使用外键',
+        MODIFY ledger_department_ids JSON NOT NULL COMMENT '积分明细授权部门 ID 数组，多选合并去重';
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='orvibo_jifen_system_state' AND COLUMN_NAME='owner_bootstrap_done') THEN
+        ALTER TABLE orvibo_jifen_system_state
+            ADD owner_bootstrap_done TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已完成独立的系统所有者初始化',
+            ADD owner_bootstrap_ids JSON NULL COMMENT '已处理的初始所有者 user_id，防止同步重复恢复授权';
+        UPDATE orvibo_jifen_system_state SET owner_bootstrap_ids=JSON_ARRAY();
+    END IF;
+    ALTER TABLE orvibo_jifen_system_state
+        MODIFY owner_bootstrap_ids JSON NOT NULL COMMENT '已处理的初始所有者 user_id，防止同步重复恢复授权';
+
+    IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='orvibo_jifen_permission_audit' AND COLUMN_NAME='event') THEN
+        ALTER TABLE orvibo_jifen_permission_audit
+            ADD event VARCHAR(30) NOT NULL DEFAULT 'employee' COMMENT '变更类别：employee 员工授权，role 角色配置，owner_init 初始所有者',
+            ADD target_id VARCHAR(36) NULL COMMENT '变更对象 ID，员工或角色',
+            ADD actor_name VARCHAR(200) NULL COMMENT '操作者姓名快照，系统初始化为空',
+            ADD target_name VARCHAR(200) NULL COMMENT '变更对象名称快照',
+            ADD `before` JSON NULL COMMENT '修改前授权或角色定义快照',
+            ADD `after` JSON NULL COMMENT '修改后授权或角色定义快照';
+        UPDATE orvibo_jifen_permission_audit a
+            LEFT JOIN orvibo_jifen_employees e ON e.id=a.employee_id
+            LEFT JOIN orvibo_jifen_employees actor ON actor.id=a.actor_id
+            SET a.target_id=a.employee_id, a.target_name=e.name, a.actor_name=actor.name;
+    END IF;
+    ALTER TABLE orvibo_jifen_permission_audit
+        MODIFY employee_id VARCHAR(36) NULL COMMENT '被变更员工 ID，角色配置事件为空',
+        MODIFY old_role VARCHAR(36) NULL COMMENT '旧角色 ID，兼容历史员工授权日志',
+        MODIFY new_role VARCHAR(36) NULL COMMENT '新角色 ID，兼容历史员工授权日志',
+        COMMENT='角色、员工授权及所有者变更审计，保留旧日志';
+    IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='orvibo_jifen_permission_audit' AND INDEX_NAME='ix_permission_audit_created') THEN
+        ALTER TABLE orvibo_jifen_permission_audit ADD INDEX ix_permission_audit_created (created_at, id) COMMENT '变更记录稳定分页';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE()
+        AND TABLE_NAME='orvibo_jifen_permission_audit' AND INDEX_NAME='ix_permission_audit_target') THEN
+        ALTER TABLE orvibo_jifen_permission_audit ADD INDEX ix_permission_audit_target (target_id, created_at) COMMENT '按员工或角色追踪授权变更';
+    END IF;
+END$$
+DELIMITER ;
+CALL orvibo_jifen_upgrade_permissions();
+DROP PROCEDURE orvibo_jifen_upgrade_permissions;

@@ -12,7 +12,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
 from app.db import AppSession, Base, make_engine
-from app.models import Department, Employee, Membership, SystemState
+from app.models import Department, Employee, Membership, SystemState, Role
+from app.permissions import PERMISSIONS, BUILTINS
 
 
 @pytest.fixture(scope="session")
@@ -45,6 +46,7 @@ def factory(test_engine):
             connection.execute(delete(table))
     with factory.begin() as db:
         db.add(SystemState(id=1))
+        db.add_all([Role(id=id, name=name, permissions=[] if id == 'none' else [p for p in PERMISSIONS if id != 'operator' or p != 'history.others']) for id, name in BUILTINS.items()])
         db.add_all([
             Department(id="rd", name="研发", path_ids=["rd"], path_names=["研发"]),
             Department(id="sw", name="软件", parent_id="rd", path_ids=["rd", "sw"], path_names=["研发", "软件"]),
@@ -53,7 +55,7 @@ def factory(test_engine):
             Department(id="east", name="华东", parent_id="sales", path_ids=["sales", "east"], path_names=["销售", "华东"]),
         ])
         db.add_all([
-            Employee(id="admin", open_id="ou_admin", name="管理员", status="active", role="admin"),
+            Employee(id="admin", open_id="ou_admin", name="管理员", status="active", role="admin", history_scope="all", ledger_scope="all"),
             Employee(id="operator", open_id="ou_operator", name="操作员", status="active", role="operator"),
             Employee(id="a", open_id="ou_a", name="张三", status="active"),
             Employee(id="b", open_id="ou_b", name="李四", status="active"),

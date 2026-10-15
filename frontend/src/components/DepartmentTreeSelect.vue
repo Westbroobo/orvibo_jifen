@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'v
 import type { CSSProperties } from 'vue'
 import type { Department } from '../types'
 
-const props = defineProps<{ modelValue: string; departments: Department[] }>()
+const props = withDefaults(defineProps<{ modelValue: string; departments: Department[]; placeholder?: string; label?: string; allowAll?: boolean }>(), { placeholder: '全部部门', label: '筛选员工部门（含下级部门）', allowAll: true })
 const emit = defineEmits<{ 'update:modelValue': [id: string] }>()
 const trigger = ref<HTMLButtonElement | null>(null)
 const menu = ref<HTMLElement | null>(null)
@@ -37,7 +37,7 @@ const rows = computed(() => {
       visited.add(department.id)
       const nested = children.get(department.id) ?? []
       result.push({ id: department.id, name: department.name, path: department.path_names.join(' / ') || department.name,
-        ancestors, children: nested.length, position: index + 1 + (ancestors.length ? 0 : 1), siblings: items.length + (ancestors.length ? 0 : 1) })
+        ancestors, children: nested.length, position: index + 1 + (ancestors.length || !props.allowAll ? 0 : 1), siblings: items.length + (ancestors.length || !props.allowAll ? 0 : 1) })
       visit(nested, [...ancestors, department.id])
     })
   }
@@ -48,7 +48,7 @@ const matches = computed(() => rows.value.filter(row => row.path.toLocaleLowerCa
 const included = computed(() => new Set(matches.value.flatMap(row => [...row.ancestors, row.id])))
 const expansion = computed(() => needle.value ? searchExpanded.value : expanded.value)
 const visible = computed<Row[]>(() => [
-  { id: '', name: '全部部门', path: '全部部门', ancestors: [], children: 0, position: 1, siblings: rows.value.filter(row => !row.ancestors.length).length + 1 },
+  ...(props.allowAll ? [{ id: '', name: '全部部门', path: '全部部门', ancestors: [], children: 0, position: 1, siblings: rows.value.filter(row => !row.ancestors.length).length + 1 }] : []),
   ...rows.value.filter(row => (!needle.value || included.value.has(row.id)) && row.ancestors.every(id => expansion.value.has(id))),
 ])
 const rowId = (id: string) => `${treeId}-${id || 'all'}`
@@ -86,7 +86,7 @@ async function showMenu() {
   expanded.value = new Set([...expanded.value, ...(current?.ancestors ?? [])])
   open.value = true; positionMenu()
   await nextTick()
-  activeId.value = current?.id ?? ''
+  activeId.value = current?.id ?? visible.value[0]?.id ?? ''
   search.value?.focus({ preventScroll: true }); scrollActive()
 }
 function closeMenu(restoreFocus = false) {
@@ -113,14 +113,14 @@ async function onKey(event: KeyboardEvent) {
     activeId.value = visible.value[Math.max(0, Math.min(visible.value.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]!.id
   } else if (!query.value && ['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
     event.preventDefault()
-    if (event.key === 'Home') activeId.value = ''
+    if (event.key === 'Home') activeId.value = visible.value[0]?.id ?? ''
     else if (event.key === 'End') activeId.value = visible.value.at(-1)!.id
     else if (event.key === 'ArrowRight' && row.children) {
       if (!expansion.value.has(row.id)) toggle(row)
       else activeId.value = visible.value[index + 1]?.id ?? row.id
     } else if (event.key === 'ArrowLeft') {
       if (row.children && expansion.value.has(row.id)) toggle(row)
-      else activeId.value = row.ancestors.at(-1) ?? ''
+      else activeId.value = row.ancestors.at(-1) ?? visible.value[0]?.id ?? ''
     }
   } else return
   await nextTick(); scrollActive()
@@ -144,9 +144,9 @@ onUnmounted(() => {
 
 <template>
   <div class="department-select">
-    <button ref="trigger" type="button" class="department-trigger" :class="{ expanded: open, chosen: modelValue }" aria-label="筛选员工部门（含下级部门）" aria-haspopup="tree" :aria-expanded="open" :aria-controls="treeId" :title="selectedPath || (modelValue ? '部门已失效' : '全部部门')" @click="open ? closeMenu(true) : showMenu()" @keydown.down.prevent="showMenu()" @focusout="focusOut">
+    <button ref="trigger" type="button" class="department-trigger" :class="{ expanded: open, chosen: modelValue }" :aria-label="label" aria-haspopup="tree" :aria-expanded="open" :aria-controls="treeId" :title="selectedPath || (modelValue ? '部门已失效' : placeholder)" @click="open ? closeMenu(true) : showMenu()" @keydown.down.prevent="showMenu()" @focusout="focusOut">
       <svg class="department-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7 2h6v4H7zM2 14h5v4H2zM13 14h5v4h-5zM10 6v4M4.5 14v-4h11v4" /></svg>
-      <span>{{ selected?.name || (modelValue ? '部门已失效' : '全部部门') }}</span>
+      <span>{{ selected?.name || (modelValue ? '部门已失效' : placeholder) }}</span>
       <svg class="department-arrow" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 8 5 5 5-5" /></svg>
     </button>
     <Teleport to="body">
@@ -182,7 +182,7 @@ onUnmounted(() => {
 .department-icon,.department-arrow{color:var(--muted)}
 .department-arrow{width:14px;height:14px;transition:transform .15s}
 .department-trigger.expanded .department-arrow{transform:rotate(180deg)}
-.department-menu{position:fixed;z-index:9;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);box-shadow:0 8px 28px rgba(31,35,41,.14);font-family:var(--sans)}
+.department-menu{position:fixed;z-index:11;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);box-shadow:0 8px 28px rgba(31,35,41,.14);font-family:var(--sans)}
 .department-search{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
 .department-search>svg{width:16px;height:16px;flex:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;color:var(--muted)}
 .department-search input{border:0;padding:4px 0;border-radius:0;background:transparent;font-size:var(--fs-sm)}
