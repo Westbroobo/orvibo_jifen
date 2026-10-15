@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { api } from '../api'
+import { api, downloadFile } from '../api'
 import type { ScoreLedgerResponse } from '../types'
 import { recordTime } from '../historyPresentation'
 import DepartmentTreeSelect from './DepartmentTreeSelect.vue'
@@ -15,16 +15,34 @@ const month = ref(props.currentMonth || currentMonth())
 const query = ref(''), departmentId = ref(''), operation = ref('all'), status = ref('all'), page = ref(1)
 const data = ref<ScoreLedgerResponse | null>(null)
 const loading = ref(false), error = ref('')
+const exporting = ref(false), exportError = ref('')
 const expandedReasons = ref(new Set<string>())
 const panel = ref<HTMLElement | null>(null), scroller = ref<HTMLElement | null>(null), panelHeight = ref(480)
 const pages = computed(() => Math.max(1, Math.ceil((data.value?.total ?? 0) / 20)))
 const departments = computed(() => data.value?.month === month.value ? data.value.departments : [])
 const rows = computed(() => (data.value?.items ?? []).map(item => ({ ...item, time: recordTime(item.created_at) })))
 let pending: AbortController | undefined
+let exportRequest: AbortController | undefined
 let debounce: ReturnType<typeof setTimeout> | undefined
 let observer: ResizeObserver | undefined
 let resizeFrame: number | undefined
 let sequence = 0
+function filterParams() {
+  return new URLSearchParams({ month: month.value, q: query.value.trim(), department_id: departmentId.value,
+    operation: operation.value, status: status.value })
+}
+async function exportExcel() {
+  if (exporting.value || loading.value || !data.value?.total) return
+  const request = new AbortController()
+  exportRequest = request; exporting.value = true; exportError.value = ''
+  try {
+    await downloadFile(`/score-ledgers/export?${filterParams()}`, `积分明细_${month.value}.xlsx`, request.signal)
+  } catch (e) {
+    if (!request.signal.aborted) exportError.value = e instanceof Error ? e.message : '导出失败，请稍后重试'
+  } finally {
+    if (exportRequest === request) { exporting.value = false; exportRequest = undefined }
+  }
+}
 async function load() {
   clearTimeout(debounce); pending?.abort()
   const request = new AbortController(), version = ++sequence
@@ -33,8 +51,8 @@ async function load() {
     data.value = null; error.value = '请选择记分月份'; loading.value = false; return
   }
   try {
-    const params = new URLSearchParams({ month: month.value, q: query.value.trim(), department_id: departmentId.value,
-      operation: operation.value, status: status.value, page: String(page.value) })
+    const params = filterParams()
+    params.set('page', String(page.value))
     const result = await api<ScoreLedgerResponse>(`/score-ledgers?${params}`, 'GET', undefined, request.signal)
     if (request.signal.aborted || version !== sequence) return
     data.value = result; page.value = result.page; expandedReasons.value = new Set()
@@ -48,6 +66,7 @@ async function load() {
 }
 watch(month, () => { departmentId.value = '' })
 watch([month, query, departmentId, operation, status], (values, previous) => {
+  exportRequest?.abort(); exportRequest = undefined; exporting.value = false; exportError.value = ''
   page.value = 1; pending?.abort(); ++sequence; clearTimeout(debounce); loading.value = true; error.value = ''
   debounce = setTimeout(load, values[1] !== previous[1] ? 250 : 0)
 })
@@ -79,7 +98,7 @@ onMounted(() => {
   window.addEventListener('resize', scheduleResize); scheduleResize()
 })
 onUnmounted(() => {
-  ++sequence; pending?.abort(); clearTimeout(debounce); observer?.disconnect()
+  ++sequence; pending?.abort(); exportRequest?.abort(); clearTimeout(debounce); observer?.disconnect()
   window.removeEventListener('resize', scheduleResize)
   if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame)
 })
@@ -87,7 +106,8 @@ onUnmounted(() => {
 
 <template>
   <main class="ledger-page" aria-label="积分明细">
-    <header class="ledger-heading"><h1 class="panel-title">积分明细</h1><button type="button" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新' }}</button></header>
+    <header class="ledger-heading"><h1 class="panel-title">积分明细</h1><div class="ledger-actions"><button type="button" class="ledger-export" :disabled="loading || exporting || !data?.total" title="导出当前筛选条件下的全部明细" @click="exportExcel"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2v10m-4-4 4 4 4-4M3 12v5h14v-5" /></svg>{{ exporting ? '导出中…' : '导出 Excel' }}</button><button type="button" :disabled="loading" @click="load">{{ loading ? '刷新中…' : '刷新' }}</button></div></header>
+    <div v-if="exportError" class="ledger-error ledger-export-error" role="alert">{{ exportError }}<button type="button" :disabled="loading || exporting || !data?.total" @click="exportExcel">重试导出</button></div>
     <div class="ledger-summary" aria-live="polite">
       <div><span>记录数</span><b>{{ loading || !data ? '—' : data.total }}<small> 笔</small></b></div>
       <div><span>有效加分合计</span><b class="plus-text">{{ loading || !data ? '—' : `+${data.summary.plus_total}` }}<small> 分</small></b></div>
@@ -127,6 +147,7 @@ onUnmounted(() => {
 
 <style scoped>
 .ledger-page{display:grid;gap:16px}.ledger-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 0}.ledger-heading h1{margin:0}
+.ledger-actions{display:flex;gap:8px;align-items:center}.ledger-export{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.ledger-export svg{width:16px;height:16px;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.ledger-export-error{border:1px solid var(--line);border-radius:var(--r-lg)}
 .ledger-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ledger-summary>div{padding:14px 20px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface)}.ledger-summary span{display:block;color:var(--muted);font-size:var(--fs-sm)}.ledger-summary b{display:block;margin-top:4px;font-family:var(--mono);font-size:22px;overflow-wrap:anywhere}.ledger-summary small{font-family:var(--sans);font-size:var(--fs-xs);font-weight:400;color:var(--muted)}
 .ledger-panel{display:flex;flex-direction:column;min-height:0;padding:0;overflow:hidden}.ledger-filters{display:flex;gap:10px;flex-wrap:wrap;padding:18px 20px 10px;flex:none}.ledger-filters input,.ledger-filters select{height:40px;border-color:var(--control-line);font-size:var(--fs-sm)}.ledger-filters input[type=month]{width:154px}.ledger-filters input[type=search]{flex:1;min-width:150px}.ledger-department{flex:1;min-width:200px}.ledger-filters select{width:110px}.ledger-filters button{flex:none}.ledger-hint{flex:none;margin:0;padding:0 20px 14px;font-size:var(--fs-xs);color:var(--muted)}
 .ledger-scroller{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}.ledger-scroller:focus-visible{outline-offset:-2px}.ledger-row{display:grid;grid-template-columns:30px minmax(140px,1.2fr) 65px 65px 75px minmax(130px,1fr) 125px 60px;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid var(--line);font-size:var(--fs-sm)}.ledger-table-head{position:sticky;top:0;z-index:1;background:var(--surface-2)}.ledger-table-head .ledger-row{padding-top:11px;padding-bottom:11px;color:var(--muted);font-size:var(--fs-xs);font-weight:600}.ledger-row:has(.ledger-person):hover{background:#FAFBFC}.ledger-index{font-family:var(--mono);color:var(--muted);text-align:center}.ledger-person{display:flex;align-items:flex-start;gap:9px;min-width:0}.ledger-person>div{min-width:0}.ledger-person b{font-weight:600}.ledger-person small{display:block;margin-top:4px;color:var(--muted);overflow-wrap:anywhere;line-height:1.6}.ledger-delta{font-family:var(--mono);font-size:15px;overflow-wrap:anywhere}.ledger-before,.ledger-after{font-family:var(--mono);overflow-wrap:anywhere}.ledger-override{display:block;font-family:var(--sans);color:var(--accent-deep);font-size:10px;margin-top:4px}.ledger-reason{min-width:0}.ledger-reason p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}.ledger-reason p.collapsed{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.ledger-reason button{padding:2px 0;border:0;background:none;color:var(--accent-deep);font-size:var(--fs-xs)}.ledger-time{font-size:var(--fs-xs);color:var(--muted)}.ledger-time time{font-family:var(--mono)}.ledger-time time span,.ledger-time>small{display:block}.ledger-time>small{margin-top:4px;color:var(--text)}.ledger-state>span{display:inline-flex;padding:3px 7px;border-radius:var(--r-sm);font-size:var(--fs-xs);white-space:nowrap}.state-valid{background:var(--plus-soft);color:var(--plus-ink)}.state-cancelled{background:var(--surface-2);color:var(--muted)}.cancelled .ledger-delta b{text-decoration:line-through}.mobile-label{display:none}

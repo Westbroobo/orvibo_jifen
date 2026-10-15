@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
+from io import BytesIO
 
 import pytest
+from openpyxl import load_workbook
 from sqlalchemy import func, select
 
 from app.cancellations import cancel_score
@@ -110,3 +112,85 @@ def test_unavailable_operator_cannot_read(client, factory, state):
     with factory.begin() as db:
         db.get(Employee, "operator").status = state
     assert client.get("/api/score-ledgers").status_code in (401, 403)
+    assert client.get("/api/score-ledgers/export").status_code in (401, 403)
+
+
+def exported(client, **params):
+    response = client.get("/api/score-ledgers/export", params={"month": "2026-10", **params})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "filename*=UTF-8''" in response.headers["content-disposition"]
+    workbook = load_workbook(BytesIO(response.content))
+    return workbook, list(workbook["积分明细"].values)
+
+
+def test_export_all_pages_snapshot_and_numeric_zero(client, factory, settings, when):
+    login(client, factory)
+    for i in range(22):
+        submit(factory, settings, when + timedelta(seconds=i), request(points=2))
+    submit(factory, settings, when + timedelta(minutes=1), request(overrides={"a": 0}))
+    with factory.begin() as db:
+        db.get(Employee, "a").name = "调岗后新姓名"
+        db.get(Department, "team").name = "调岗后新部门"
+    workbook, rows = exported(client)
+    assert len(rows) == 24  # 表头 + 23 条，超过页面的 20 条。
+    assert rows[1][2:4] == ("张三", "研发 / 软件 / 平台")
+    assert rows[1][4:8] == (5, 104, 0, "手动覆盖")
+    assert rows[1][9] == "2026-10-06 14:01:00"
+    assert rows[1][10:12] == ("管理员", "有效")
+    assert [row[0] for row in rows[1:]] == list(range(1, 24))
+    assert workbook["积分明细"].freeze_panes == "A2"
+    assert workbook["积分明细"].auto_filter.ref == "A1:M24"
+    workbook.close()
+
+
+def test_export_filters_cancellation_and_operator_scope(client, factory, settings, when):
+    batch = submit(factory, settings, when, request(person_ids=["a", "b", "c"],
+                   operation="minus", points=3, recipients={"person_ids": ["admin", "operator"]}), user="operator")
+    submit(factory, settings, when, request(person_ids=["b"]))
+    submit(factory, settings, datetime(2026, 11, 1), request(person_ids=["a"]), user="operator")
+    with factory.begin() as db:
+        ledger = db.scalar(select(Ledger).where(Ledger.batch_id == batch, Ledger.employee_id == "a"))
+        cancel_score(db, ledger, "operator", when + timedelta(minutes=1))
+    login(client, factory, "operator")
+    workbook, rows = exported(client)
+    assert len(rows) == 4  # 多通知对象不扩展导出行数，管理员的批次也不导出。
+    assert sorted(row[2] for row in rows[1:]) == sorted(["张三", "李四", "多部门员工"])
+    workbook.close()
+    workbook, rows = exported(client, department_id="rd", operation="minus", status="cancelled", q="张")
+    assert len(rows) == 2
+    assert rows[1][2] == "张三" and rows[1][11:13] == ("已作废", "2026-10-06 14:01:00")
+    workbook.close()
+    workbook, rows = exported(client, department_id="rd", operation="minus", status="valid")
+    assert len(rows) == 2 and rows[1][2] == "多部门员工"
+    assert rows[1][3] == "研发 / 软件 / 平台；销售 / 华东"
+    workbook.close()
+    workbook, rows = exported(client, month="2026-11")
+    assert len(rows) == 2
+    workbook.close()
+
+
+def test_export_text_is_not_excel_formula(client, factory, settings, when):
+    with factory.begin() as db:
+        db.get(Employee, "a").name = '=HYPERLINK("https://example.com","姓名")'
+    submit(factory, settings, when, request(reason='=1+1\n完整原因，逗号,引号"保持原样\t制表符\x01'))
+    login(client, factory)
+    workbook, rows = exported(client)
+    sheet = workbook["积分明细"]
+    assert sheet["C2"].data_type == sheet["I2"].data_type == "s"
+    assert sheet["I2"].value == '=1+1\n完整原因，逗号,引号"保持原样\t制表符'
+    assert sheet["E2"].data_type == "n" and sheet["E2"].value == 5
+    workbook.close()
+
+
+def test_export_auth_validation_and_empty_results(client, factory):
+    assert client.get("/api/score-ledgers/export").status_code == 401
+    login(client, factory, "operator")
+    for params in ({"month": "2026-13"}, {"status": "bad"}, {"operation": "bad"}):
+        assert client.get("/api/score-ledgers/export", params=params).status_code == 422
+    workbook, rows = exported(client)
+    assert len(rows) == 1  # 无匹配记录时仍可返回合法的空表。
+    workbook.close()
+    with factory.begin() as db:
+        db.get(Employee, "operator").role = "none"
+    assert client.get("/api/score-ledgers/export").status_code == 403
