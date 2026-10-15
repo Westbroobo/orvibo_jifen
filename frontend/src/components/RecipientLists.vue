@@ -83,7 +83,7 @@ function summary(preset: Preset) {
           <fieldset :disabled="blocked || !canEdit">
             <div class="list-basics">
               <div><label class="field-label" for="list-name">名单名称</label><input id="list-name" v-model="name" maxlength="100" placeholder="例如：研发通知名单" required></div>
-              <div><label class="field-label" for="list-scope">可见范围</label><select v-if="!editingId && user.can_manage" id="list-scope" v-model="scope"><option value="personal">仅自己</option><option value="public">所有在职员工</option></select><div v-else id="list-scope" class="scope-label">{{ scope === 'public' ? '所有在职员工' : '仅自己' }}</div></div>
+              <div><label class="field-label" for="list-scope">可见范围</label><select v-if="!editingId && user.can_manage" id="list-scope" v-model="scope"><option value="personal">仅自己</option><option value="public">已授权用户</option></select><div v-else id="list-scope" class="scope-label">{{ scope === 'public' ? '已授权用户' : '仅自己' }}</div></div>
             </div>
             <RecipientRangeEditor v-model="selection" :people="directory.people" :departments="directory.departments" @ready="rangeReady = $event" />
           </fieldset>

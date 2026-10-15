@@ -37,7 +37,7 @@ const editable = (role: RoleDefinition) => props.canConfigure && role.id !== 'no
             </tr>
           </tbody>
           <tbody><tr class="management-row"><th scope="row" colspan="2" class="merged-heading">固定管理能力</th><td v-for="role in roles" :key="role.id"><p v-if="role.id === 'admin'">员工授权、变更记录<br>公共名单、组织同步</p><span v-else class="no-management">—</span></td></tr></tbody>
-          <tfoot><tr><th scope="row" colspan="2" class="merged-heading">角色设置</th><td v-for="role in roles" :key="role.id"><div v-if="editable(role)" class="role-actions"><button type="button" :disabled="busy" :aria-label="`编辑${role.name}`" @click="emit('edit', role)">编辑权限</button><button v-if="!role.builtin" type="button" class="delete-role" :disabled="busy || !!role.employee_count" :aria-label="`删除${role.name}`" :title="role.employee_count ? '有员工使用，不能删除' : undefined" @click="emit('remove', role)">删除</button></div><span v-else class="fixed-role">{{ role.id === 'none' ? '基础权限' : '仅查看' }}</span></td></tr></tfoot>
+          <tfoot><tr><th scope="row" colspan="2" class="merged-heading">角色设置</th><td v-for="role in roles" :key="role.id"><div v-if="editable(role)" class="role-actions"><button type="button" :disabled="busy" :aria-label="`编辑${role.name}`" @click="emit('edit', role)">编辑权限</button><button v-if="!role.builtin" type="button" class="delete-role" :disabled="busy || !!role.employee_count" :aria-label="`删除${role.name}`" :title="role.employee_count ? '有员工使用，不能删除' : undefined" @click="emit('remove', role)">删除</button></div><span v-else class="fixed-role">{{ role.id === 'none' ? '无使用权限' : '仅查看' }}</span></td></tr></tfoot>
         </table>
       </div>
       <div class="mobile-roles">
@@ -51,7 +51,7 @@ const editable = (role: RoleDefinition) => props.canConfigure && role.id !== 'no
           <footer v-if="editable(role)" class="role-actions"><button type="button" :disabled="busy" :aria-label="`编辑${role.name}`" @click="emit('edit', role)">编辑权限</button><button v-if="!role.builtin" type="button" class="delete-role" :disabled="busy || !!role.employee_count" :aria-label="`删除${role.name}`" :title="role.employee_count ? '有员工使用，不能删除' : undefined" @click="emit('remove', role)">删除</button></footer>
         </article>
       </div>
-      <footer class="roles-baseline"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3 4 5v5c0 3 3 5 6 7 3-2 6-4 6-7V5Z" /><path d="m7 10 2 2 4-4" /></svg>全部在职员工均可查看公共名单、维护个人名单</footer>
+      <footer class="roles-baseline"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3 4 5v5c0 3 3 5 6 7 3-2 6-4 6-7V5Z" /><path d="m7 10 2 2 4-4" /></svg>已授权用户可查看公共名单、维护个人名单；普通员工仅显示无权限说明。</footer>
     </template>
   </section>
 </template>

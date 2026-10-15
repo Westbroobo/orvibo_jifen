@@ -13,7 +13,7 @@ from .config import get_settings
 from .db import get_db, lock_state, now_utc
 from .feishu import FeishuClient, FeishuError
 from .models import Employee, LoginState, Session, SystemState
-from .permissions import require_active, require_permission, require_manager, user_capabilities, bootstrap_owners, owner_notice
+from .permissions import require_active, require_system_access, require_permission, require_manager, user_capabilities, bootstrap_owners, owner_notice
 
 router = APIRouter(prefix="/api/auth")
 settings = get_settings()
@@ -44,6 +44,10 @@ def current_user(request: Request, db=Depends(get_db)):
 
 def active(user=Depends(current_user), db=Depends(get_db)):
     return require_active(db, user.id)
+
+
+def system_user(user=Depends(current_user), db=Depends(get_db)):
+    return require_system_access(db, user.id)
 
 
 def permission(name):
@@ -134,7 +138,8 @@ def me(request: Request, user=Depends(current_user), db=Depends(get_db)):
         db.refresh(user)
     return {"id": user.id, "name": user.name, "role": user.role, "status": user.status,
             "avatar_url": user.avatar_url, "csrf_token": request.state.session.csrf_token,
-            "demo_mode": settings.demo_mode, **user_capabilities(db, user), "owner_notice": owner_notice(db, settings)}
+            "demo_mode": settings.demo_mode, **user_capabilities(db, user),
+            "owner_notice": owner_notice(db, settings) if user.role in {"owner", "admin"} else ""}
 
 
 @router.post("/logout")

@@ -3,7 +3,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from . import auth
-from .permissions import require_active, is_manager
+from .permissions import require_system_access, is_manager
 from .db import get_db, lock_state, now_utc
 from .models import Preset
 from .schemas import PresetRequest, Selection
@@ -18,7 +18,7 @@ def preset_view(preset, user):
 
 
 @router.get("")
-def presets(user=Depends(auth.active), db=Depends(get_db)):
+def presets(user=Depends(auth.system_user), db=Depends(get_db)):
     statement = select(Preset).where(or_(Preset.scope == "public",
         (Preset.scope == "personal") & (Preset.owner_id == user.id))).order_by(Preset.updated_at.desc(), Preset.id)
     return [preset_view(p, user) for p in db.scalars(statement)]
@@ -64,23 +64,23 @@ def save_preset(db, user, body, preset=None):
 
 
 @router.post("", status_code=201)
-def new_preset(body: PresetRequest, user=Depends(auth.active), db=Depends(get_db)):
+def new_preset(body: PresetRequest, user=Depends(auth.system_user), db=Depends(get_db)):
     lock_state(db)
-    user = require_active(db, user.id)
+    user = require_system_access(db, user.id)
     return save_preset(db, user, body)
 
 
 @router.put("/{preset_id}")
-def update_preset(preset_id: str, body: PresetRequest, user=Depends(auth.active), db=Depends(get_db)):
+def update_preset(preset_id: str, body: PresetRequest, user=Depends(auth.system_user), db=Depends(get_db)):
     lock_state(db)
-    user = require_active(db, user.id)
+    user = require_system_access(db, user.id)
     return save_preset(db, user, body, writable_preset(db, user, preset_id))
 
 
 @router.delete("/{preset_id}")
-def delete_preset(preset_id: str, user=Depends(auth.active), db=Depends(get_db)):
+def delete_preset(preset_id: str, user=Depends(auth.system_user), db=Depends(get_db)):
     lock_state(db)
-    user = require_active(db, user.id)
+    user = require_system_access(db, user.id)
     db.delete(writable_preset(db, user, preset_id))
     db.commit()
     return {"ok": True}

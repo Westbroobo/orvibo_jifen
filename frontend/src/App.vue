@@ -14,13 +14,14 @@ import BatchResultDialog from './components/BatchResultDialog.vue'
 import RecipientLists from './components/RecipientLists.vue'
 import RecipientRangeEditor from './components/RecipientRangeEditor.vue'
 import RecipientPresetSelect from './components/RecipientPresetSelect.vue'
+import AccessDenied from './components/AccessDenied.vue'
 
 const logoUrl = '/logo.svg'
 const user = ref<User | null>(null)
 const ready = ref(false)
 const redirectingToFeishu = ref(false)
 const demoAvailable = ref(false)
-const page = ref<'console' | 'lists' | 'history' | 'ledger' | 'admin'>('console')
+const page = ref<'console' | 'lists' | 'history' | 'ledger' | 'admin' | 'no-access'>('console')
 const directory = ref<Directory>({ people: [], departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false })
 const totals = ref<Record<string, number>>({})
 const month = ref('')
@@ -81,8 +82,15 @@ function cancelPageLoad() {
   loadingHistory.value = false
 }
 
-const authorized = computed(() => user.value?.status === 'active')
+const authorized = computed(() => user.value?.status === 'active' && user.value.can_access_system)
 const can = (permission: string) => !!user.value?.permissions.includes(permission as User['permissions'][number])
+function defaultPage(): typeof page.value {
+  if (!authorized.value) return 'no-access'
+  if (can('adjustments.write')) return 'console'
+  if (can('history.read')) return 'history'
+  if (can('ledgers.read')) return 'ledger'
+  return user.value?.can_manage ? 'admin' : 'no-access'
+}
 function allowedPage(value: typeof page.value) {
   return authorized.value && (value === 'lists' || value === 'admin' && user.value?.can_manage ||
     value === 'console' && can('adjustments.write') || value === 'history' && can('history.read') || value === 'ledger' && can('ledgers.read'))
@@ -92,17 +100,25 @@ async function refreshIdentity(signal?: AbortSignal) {
   const current = await api<User>('/auth/me', 'GET', undefined, signal)
   if (signal?.aborted) return
   user.value = current; setCsrf(current.csrf_token)
-  if (previous && JSON.stringify([previous.role, previous.permissions, previous.history_scope, previous.ledger_scope, previous.ledger_department_ids]) !== JSON.stringify([current.role, current.permissions, current.history_scope, current.ledger_scope, current.ledger_department_ids])) {
+  if (previous && JSON.stringify([previous.role, previous.permissions, previous.history_scope, previous.ledger_scope, previous.ledger_department_ids, previous.status, previous.can_access_system]) !== JSON.stringify([current.role, current.permissions, current.history_scope, current.ledger_scope, current.ledger_department_ids, current.status, current.can_access_system])) {
     preview.value = null; confirmation.value = false; idempotency.value = ''; recallConfirmation.value = null
     history.value = []; historyTotal.value = 0; ++historySequence; closeDetail(); totals.value = {}
   }
-  if (!allowedPage(page.value)) page.value = can('adjustments.write') ? 'console' : 'lists'
+  if (!authorized.value) {
+    clearTimeout(resolveTimer); ++resolveSequence; clearTimeout(previewTimer)
+    rangeDialog.value = false; rangeReady.value = false; preview.value = null; confirmation.value = false; recallConfirmation.value = null; closeDetail()
+    targets.value = []; overrides.value = {}; reason.value = ''; presetId.value = ''; presets.value = []
+    directory.value = { people: [], departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false }
+    recipients.value = unionSelection(); resolvedRecipients.value = []; recipientWarnings.value = []; recipientsResolving.value = false
+    totals.value = {}; month.value = ''; history.value = []; historyTotal.value = 0; ++historySequence
+  }
+  if (!allowedPage(page.value)) page.value = defaultPage()
 }
 let permissionRefresh: Promise<void> | undefined
 function permissionsDenied() {
   if (!permissionRefresh) permissionRefresh = refreshIdentity().catch(() => { user.value = null; setCsrf(''); closeDetail() }).finally(() => { permissionRefresh = undefined })
 }
-async function permissionsChanged() { await refreshIdentity(); if (authorized.value) await refresh() }
+async function permissionsChanged() { await switchPage(page.value) }
 const delta = computed(() => operation.value === 'plus' ? points.value : -points.value)
 const targetIds = computed(() => [...new Set(targets.value)])
 const selectedPeople = computed(() => directory.value.people.filter(p => targetIds.value.includes(p.id)))
@@ -177,8 +193,9 @@ watch(rangeDialog, async (value) => {
   else { await nextTick(); restoreOpener() }
 })
 async function refresh(signal?: AbortSignal) {
+  if (!authorized.value) return
   const [data, balances, configs] = await Promise.all([api<Directory>('/directory', 'GET', undefined, signal), can('adjustments.write') ? api<Balances>('/balances', 'GET', undefined, signal) : Promise.resolve(null), api<Preset[]>('/presets', 'GET', undefined, signal)])
-  if (signal?.aborted) return
+  if (signal?.aborted || !authorized.value) return
   directory.value = data; if (balances) applyBalances(balances); presets.value = configs
   if (presetId.value) {
     if (!configs.some(p => p.id === presetId.value)) { presetId.value = ''; notice.value = '原发送名单已删除，请重新选择。' }
@@ -198,7 +215,10 @@ async function initialize() {
   try {
     const config = await api<{ demo_mode: boolean }>('/public-config'); demoAvailable.value = config.demo_mode
     await refreshIdentity()
-    if (authorized.value) await refresh()
+    if (authorized.value) {
+      await refresh()
+      if (page.value === 'history') await loadHistory()
+    }
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
       user.value = null; setCsrf('')
@@ -263,6 +283,7 @@ watch(editingTotal, value => {
 })
 watch([recipients, directory], () => {
   clearTimeout(resolveTimer); const sequence = ++resolveSequence
+  if (!authorized.value) { recipientsResolving.value = false; return }
   recipientsResolving.value = true
   resolveTimer = setTimeout(async () => {
     if (!authorized.value) return
@@ -346,7 +367,7 @@ async function switchPage(value: typeof page.value) {
   try {
     await refreshIdentity(request.signal)
     if (request.signal.aborted) return
-    page.value = allowedPage(value) ? value : can('adjustments.write') ? 'console' : 'lists'
+    page.value = allowedPage(value) ? value : defaultPage()
     if (page.value === 'history') await loadHistory(request.signal)
     else if (page.value !== 'ledger') await refresh(request.signal)
   } catch (e) {
@@ -377,7 +398,7 @@ async function confirmRecall() {
 </script>
 
 <template>
-  <div class="page" :class="{ 'permissions-layout': authorized && page === 'admin', 'history-layout': authorized && (page === 'history' || page === 'ledger') }" :inert="rangeDialog || !!detail || confirmation || !!recallConfirmation">
+  <div class="page" :class="{ 'access-denied-layout': ready && user && !authorized, 'permissions-layout': authorized && page === 'admin', 'history-layout': authorized && (page === 'history' || page === 'ledger') }" :inert="rangeDialog || !!detail || confirmation || !!recallConfirmation">
     <header class="topbar">
       <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="30" height="30"><span>ORVIBO_员工积分系统</span></a>
       <div v-if="user" class="topbar-right">
@@ -396,7 +417,7 @@ async function confirmRecall() {
     <div v-if="user?.demo_mode" class="demo-banner">本地演示 · 使用虚拟人员，通知仅模拟发送</div>
     <section v-if="!ready" class="panel login-panel"><h1>{{ redirectingToFeishu ? '正在前往飞书授权…' : '正在加载员工积分系统' }}</h1></section>
     <section v-else-if="!user" class="panel login-panel"><h1>{{ error ? '暂时无法进入系统' : '已退出登录' }}</h1><p v-if="!error">需要继续使用时，请授权飞书账号。</p><a class="primary-button" href="/api/auth/login">{{ error ? '重新授权飞书账号' : '使用飞书账号授权' }}</a><button v-if="demoAvailable" type="button" :disabled="busy" @click="action(async () => { await api('/auth/demo', 'POST'); await initialize() })">进入本地演示</button></section>
-    <section v-else-if="!authorized" class="panel login-panel"><h1>当前账号暂无操作权限</h1><p>请联系管理员分配积分操作权限。{{ user.status === 'unknown' ? '人员目录尚待同步核实。' : '' }}</p><button type="button" :disabled="busy" @click="action(initialize)">重新检查权限</button></section>
+    <AccessDenied v-else-if="!authorized" :checking="busy" @check="action(initialize)" />
     <template v-else>
       <div class="workspace">
       <nav class="navigation" aria-label="功能导航">

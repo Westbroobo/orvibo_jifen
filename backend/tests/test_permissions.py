@@ -35,18 +35,71 @@ def owner(factory):
     set_grant(factory, "admin", role="owner")
 
 
-def test_active_employee_baseline_and_private_lists(client, factory):
+def test_unassigned_employee_can_login_but_cannot_access_system_data(client, factory):
+    with factory.begin() as db:
+        from app.models import Preset
+        db.add(Preset(id='old-private', owner_id='a', name='旧个人名单', scope='personal', selection={}))
+        db.add(Preset(id='public-list', owner_id='admin', name='公共名单', scope='public', selection={}))
     headers = login(client, factory, "a")
     me = client.get('/api/auth/me').json()
     assert me['permissions'] == [] and not me['can_manage']
-    assert me['role_name'] == '普通员工'
-    assert client.get('/api/directory').status_code == 200
+    assert me['role_name'] == '普通员工' and not me['can_access_system']
+    assert me['owner_notice'] == ''
     created = client.post('/api/presets', headers=headers, json={'name': '我的名单', 'selection': {'person_ids': ['b']}})
-    assert created.status_code == 201
+    assert created.status_code == 403 and '数据支持组' in created.json()['detail']
     assert client.post('/api/presets', headers=headers, json={'name': '公共名单', 'scope': 'public', 'selection': {}}).status_code == 403
-    for path in ['/api/balances', '/api/adjustments', '/api/score-ledgers', '/api/score-ledgers/export', '/api/admin/roles', '/api/admin/permission-audits']:
+    assert client.put('/api/presets/old-private', headers=headers, json={'name': '修改名单', 'selection': {}}).status_code == 403
+    assert client.delete('/api/presets/old-private', headers=headers).status_code == 403
+    assert client.post('/api/ranges/resolve', headers=headers, json={'person_ids': ['b']}).status_code == 403
+    for path in ['/api/directory', '/api/people', '/api/presets', '/api/balances', '/api/adjustments', '/api/score-ledgers', '/api/score-ledgers/export', '/api/admin/roles', '/api/admin/permission-audits']:
         assert client.get(path).status_code == 403
     assert client.post('/api/adjustments/preview', headers=headers, json=request().model_dump()).status_code == 403
+    assert client.post('/api/auth/logout', headers=headers).status_code == 200
+
+
+@pytest.mark.parametrize('role,permissions,allowed', [
+    ('custom', [], False), ('missing', [], False), ('custom', ['history.others'], False),
+    ('custom', ['ledgers.read'], True), ('custom', ['history.read'], True),
+    ('custom', ['adjustments.write'], True), ('operator', [], False),
+    ('admin', [], True), ('owner', [], True),
+])
+def test_system_access_uses_effective_permissions_and_management_identity(client, factory, test_engine, role, permissions, allowed):
+    with factory.begin() as db:
+        if role == 'custom':
+            db.add(Role(id='custom', name='自定义角色', permissions=permissions))
+        elif role != 'missing':
+            db.get(Role, role).permissions = permissions
+        if role != 'missing':
+            db.get(Employee, 'a').role = role
+    if role == 'missing':
+        # 模拟已有数据引用失效角色；正常业务授权会在应用关联校验时拒绝。
+        with test_engine.begin() as connection:
+            connection.execute(Employee.__table__.update().where(Employee.id == 'a').values(role=role))
+    headers = login(client, factory, 'a')
+    assert client.get('/api/auth/me').json()['can_access_system'] is allowed
+    status = 200 if allowed else 403
+    for path in ['/api/directory', '/api/people', '/api/presets']:
+        assert client.get(path).status_code == status
+    assert client.post('/api/ranges/resolve', headers=headers, json={'person_ids': ['b']}).status_code == status
+
+
+def test_existing_session_loses_list_access_and_recovers_after_reauthorization(client, factory):
+    headers = login(client, factory, 'operator')
+    body = {'name': '我的名单', 'selection': {'person_ids': ['a']}}
+    preset_id = client.post('/api/presets', headers=headers, json=body).json()['id']
+    with factory.begin() as db:
+        db.get(Role, 'operator').permissions = []
+    assert not client.get('/api/auth/me').json()['can_access_system']
+    for path in ['/api/directory', '/api/people', '/api/presets']:
+        assert client.get(path).status_code == 403
+    assert client.put('/api/presets/' + preset_id, headers=headers, json=body).status_code == 403
+    assert client.delete('/api/presets/' + preset_id, headers=headers).status_code == 403
+    with factory.begin() as db:
+        db.get(Role, 'operator').permissions = ['ledgers.read']
+    assert client.get('/api/auth/me').json()['can_access_system']
+    assert client.get('/api/presets').json()[0]['id'] == preset_id
+    assert client.put('/api/presets/' + preset_id, headers=headers, json=body).status_code == 200
+    assert client.get('/api/balances').status_code == 403
 
 
 def test_role_crud_dependencies_assignment_audits_and_fixed_identity(client, factory):

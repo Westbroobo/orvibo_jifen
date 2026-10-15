@@ -49,6 +49,18 @@ def is_manager(user):
     return user.status == "active" and user.role in {"owner", "admin"}
 
 
+def can_access_system(db, user):
+    return is_manager(user) or bool(set(function_permissions(db, user)) & {
+        "adjustments.write", "history.read", "ledgers.read"})
+
+
+def require_system_access(db, user_id):
+    user = require_active(db, user_id)
+    if not can_access_system(db, user):
+        raise HTTPException(403, "当前账号暂无系统使用权限，请联系数据支持组开通相关权限")
+    return user
+
+
 def require_manager(db, user_id, *, owner=False):
     user = require_active(db, user_id)
     if not is_manager(user) or owner and user.role != "owner":
@@ -123,4 +135,5 @@ def user_capabilities(db, user):
     role = db.get(Role, user.role)
     return {**grant_snapshot(db, user), "role_name": role.name if role else "角色已失效",
             "permissions": function_permissions(db, user), "can_manage": is_manager(user),
+            "can_access_system": can_access_system(db, user),
             "can_configure_roles": user.status == "active" and user.role == "owner"}

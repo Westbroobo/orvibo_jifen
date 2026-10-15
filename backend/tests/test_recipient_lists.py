@@ -119,7 +119,7 @@ def test_personal_name_normalization_uniqueness_and_csrf(client, factory):
     assert client.post("/api/presets", json=body | {"name": "  "}, headers=headers).status_code == 422
 
 
-@pytest.mark.parametrize("status,role", [("resigned", "admin"), ("unknown", "operator")])
+@pytest.mark.parametrize("status,role", [("resigned", "admin"), ("unknown", "operator"), ("active", "none")])
 def test_revoked_or_unavailable_users_cannot_maintain_lists(client, factory, status, role):
     headers = login(client, factory)
     body = {"name": "通知", "selection": {"person_ids": ["a"]}}

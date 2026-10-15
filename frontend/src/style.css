@@ -30,6 +30,7 @@ button:active:not(:disabled){transform:translateY(1px)}
 /* ========== 布局骨架 ========== */
 .page{max-width:1380px;margin:auto;padding:0 24px 32px}
 .page.permissions-layout,.page.history-layout{padding-bottom:16px}
+.page.access-denied-layout{padding-bottom:24px}
 .topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:16px}
 .brand{display:inline-flex;align-items:center;gap:10px;font-family:var(--serif);font-size:19px;font-weight:700;white-space:nowrap;min-width:0}
 .brand-logo{display:block;flex:none;width:30px;height:30px}

@@ -57,7 +57,7 @@ def public_config():
 
 
 @app.get("/api/directory")
-def directory(user=Depends(auth.active), db=Depends(get_db)):
+def directory(user=Depends(auth.system_user), db=Depends(get_db)):
     from .models import Department
     state = db.get(SystemState, 1)
     return {"people": employee_views(db),
@@ -70,13 +70,13 @@ def directory(user=Depends(auth.active), db=Depends(get_db)):
 
 
 @app.get("/api/people")
-def people(q: str = "", include_unavailable: bool = False, user=Depends(auth.active), db=Depends(get_db)):
+def people(q: str = "", include_unavailable: bool = False, user=Depends(auth.system_user), db=Depends(get_db)):
     return [p for p in employee_views(db) if q.strip().casefold() in p["name"].casefold()
             and (include_unavailable and is_manager(user) or p["status"] == "active")]
 
 
 @app.post("/api/ranges/resolve")
-def resolve(selection: Selection, user=Depends(auth.active), db=Depends(get_db)):
+def resolve(selection: Selection, user=Depends(auth.system_user), db=Depends(get_db)):
     return resolve_selection(db, selection)
 
 

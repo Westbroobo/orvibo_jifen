@@ -40,7 +40,7 @@ def test_csrf_permissions_and_retired_role_endpoint(client, factory):
     assert client.put("/api/admin/people/a/authorization", json={"role": "operator"}, headers=headers).status_code == 200
     with factory.begin() as db:
         db.get(Employee, "admin").role = "none"
-    assert client.get("/api/directory").status_code == 200
+    assert client.get("/api/directory").status_code == 403
     assert client.get("/api/balances").status_code == 403
     assert client.get("/api/auth/me").json()["role"] == "none"
 
@@ -79,7 +79,8 @@ def test_oauth_login_does_not_grant_role(client, factory, monkeypatch):
     assert "HttpOnly" in response.headers["set-cookie"]
     assert "token=" not in response.headers["location"]
     assert client.get("/api/auth/me").json()["role"] == "none"
-    assert client.get("/api/directory").status_code == 200
+    assert not client.get("/api/auth/me").json()["can_access_system"]
+    assert client.get("/api/directory").status_code == 403
     assert client.get("/api/adjustments").status_code == 403
 
 
