@@ -10,7 +10,7 @@ from .config import get_settings
 from .db import get_db, lock_state, now_utc
 from .delivery import retry_delivery
 from .directory import employee_views, resolve_selection
-from .models import Balance, Batch, Delivery, Ledger, MessageRecall, SystemState
+from .models import Balance, Batch, Delivery, Employee, Ledger, MessageRecall, SystemState
 from .presets import router as presets_router
 from .score_ledgers import router as score_ledgers_router
 from .authorization import router as authorization_router
@@ -115,14 +115,22 @@ def history(page: int = Query(1, ge=1), user=Depends(auth.permission("history.re
     if user.role != "owner" and user.history_scope != "all":
         statement = statement.where(Batch.operator_id == user.id)
     total = db.scalar(select(func.count()).select_from(statement.subquery()))
+    batches = db.scalars(statement.order_by(Batch.created_at.desc(), Batch.id).offset((page - 1) * 20).limit(20)).all()
+    employee_ids = {batch.operator_id for batch in batches}
+    employee_ids.update(row["person"]["id"] for batch in batches for row in batch.snapshot["rows"])
+    avatars = dict(db.execute(select(Employee.id, Employee.avatar_url).where(Employee.id.in_(employee_ids))).all()) if employee_ids else {}
     result = []
     when = now_utc()
-    for batch in db.scalars(statement.order_by(Batch.created_at.desc(), Batch.id).offset((page - 1) * 20).limit(20)):
+    for batch in batches:
         statuses = db.scalars(select(Delivery.status).join(Ledger, Delivery.ledger_id == Ledger.id).where(Ledger.batch_id == batch.id)).all()
         summary = recall_summary(db, batch.id, when)
+        people = [{"id": row["person"]["id"], "name": row["person"]["name"],
+                   "avatar_url": avatars.get(row["person"]["id"]) or row["person"].get("avatar_url", "")}
+                  for row in batch.snapshot["rows"]]
         result.append({"id": batch.id, "month": batch.month, "delta": batch.delta, "reason": batch.reason,
                        "created_at": batch.created_at.isoformat() + "Z", "operator_name": batch.snapshot["operator_name"],
-                       "names": [r["person"]["name"] for r in batch.snapshot["rows"]],
+                       "operator_avatar_url": avatars.get(batch.operator_id) or "",
+                       "people": people, "names": [person["name"] for person in people],
                        "message_count": batch.snapshot["message_count"], "statuses": dict(Counter(statuses)),
                        "recall_statuses": summary["statuses"], "recall_available": summary["available"],
                        "cancelled_scores": summary["cancelled_scores"],
