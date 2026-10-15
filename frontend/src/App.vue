@@ -8,6 +8,7 @@ import CardPreview from './components/CardPreview.vue'
 import EmployeeAvatar from './components/EmployeeAvatar.vue'
 import PermissionsPanel from './components/PermissionsPanel.vue'
 import SendingHistory from './components/SendingHistory.vue'
+import ScoreLedger from './components/ScoreLedger.vue'
 import BatchResultDialog from './components/BatchResultDialog.vue'
 import RecipientLists from './components/RecipientLists.vue'
 import RecipientRangeEditor from './components/RecipientRangeEditor.vue'
@@ -18,7 +19,7 @@ const user = ref<User | null>(null)
 const ready = ref(false)
 const redirectingToFeishu = ref(false)
 const demoAvailable = ref(false)
-const page = ref<'console' | 'lists' | 'history' | 'admin'>('console')
+const page = ref<'console' | 'lists' | 'history' | 'ledger' | 'admin'>('console')
 const directory = ref<Directory>({ people: [], departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false })
 const totals = ref<Record<string, number>>({})
 const month = ref('')
@@ -322,7 +323,7 @@ async function switchPage(value: typeof page.value) {
   pageRequest = request; loadingPage.value = true
   try {
     if (value === 'history') await loadHistory(request.signal)
-    else await refresh(request.signal)
+    else if (value !== 'ledger') await refresh(request.signal)
   } catch (e) {
     if (!request.signal.aborted) { error.value = e instanceof Error ? e.message : '加载失败'; request.abort() }
   } finally {
@@ -351,7 +352,7 @@ async function confirmRecall() {
 </script>
 
 <template>
-  <div class="page" :class="{ 'permissions-layout': authorized && page === 'admin', 'history-layout': authorized && page === 'history' }" :inert="rangeDialog || !!detail || confirmation || !!recallConfirmation">
+  <div class="page" :class="{ 'permissions-layout': authorized && page === 'admin', 'history-layout': authorized && (page === 'history' || page === 'ledger') }" :inert="rangeDialog || !!detail || confirmation || !!recallConfirmation">
     <header class="topbar">
       <a class="brand" href="/"><img class="brand-logo" :src="logoUrl" alt="" width="30" height="30"><span>ORVIBO_员工积分系统</span></a>
       <div v-if="user" class="topbar-right">
@@ -377,6 +378,7 @@ async function confirmRecall() {
         <button type="button" :class="{ active: page === 'console' }" :aria-current="page === 'console' ? 'page' : undefined" :disabled="busy" @click="switchPage('console')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" /></svg><span>操作台</span></button>
         <button type="button" :class="{ active: page === 'lists' }" :aria-current="page === 'lists' ? 'page' : undefined" :disabled="busy" @click="switchPage('lists')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 5h6M14 9h6M14 13h6M14 17h6M4 19v-2a4 4 0 0 1 8 0v2" /><circle cx="8" cy="8" r="3" /></svg><span>发送名单</span></button>
         <button type="button" :class="{ active: page === 'history' }" :aria-current="page === 'history' ? 'page' : undefined" :disabled="busy" @click="switchPage('history')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h11l3 3v13H5zM9 10h6M9 14h6M9 17h4" /></svg><span>发送记录</span></button>
+        <button type="button" :class="{ active: page === 'ledger' }" :aria-current="page === 'ledger' ? 'page' : undefined" :disabled="busy" @click="switchPage('ledger')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 3h14v18H5zM9 7h6M9 12h6M9 17h6M12 9v6" /></svg><span>积分明细</span></button>
         <button v-if="user.role === 'admin'" type="button" :class="{ active: page === 'admin' }" :aria-current="page === 'admin' ? 'page' : undefined" :disabled="busy" @click="switchPage('admin')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6zM9 12l2 2 4-4" /></svg><span>权限管理</span></button>
       </nav>
       <div class="workspace-content">
@@ -438,6 +440,7 @@ async function confirmRecall() {
       </main>
       <RecipientLists v-else-if="page === 'lists'" :presets="presets" :directory="directory" :user="user" :loading="loadingPage" @working="busy = $event" @saved="savedPreset" @deleted="deletedPreset" />
       <SendingHistory v-else-if="page === 'history'" :items="history" :total="historyTotal" :page="historyPage" :loading="loadingHistory" :busy="busy" @refresh="switchPage('history')" @change-page="changeHistoryPage" @detail="action(() => loadDetail($event))" @recall="askBatchRecall" />
+      <ScoreLedger v-else-if="page === 'ledger'" :current-month="month" />
       <PermissionsPanel v-else-if="user.role === 'admin'" :directory="directory" :busy="busy || loadingPage" @synced="switchPage('admin')" @change-role="updateRole" />
       </div>
       </div>

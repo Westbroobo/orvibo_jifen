@@ -12,6 +12,7 @@ from .delivery import retry_delivery
 from .directory import employee_views, in_selection_path, resolve_selection
 from .models import Balance, Batch, Delivery, Employee, Ledger, MessageRecall, PermissionAudit, SystemState
 from .presets import router as presets_router
+from .score_ledgers import router as score_ledgers_router
 from .recall import can_recall, recall_deadline, recall_summary, request_recall
 from .schemas import AdjustmentRequest, CommitRequest, RoleRequest, Selection, SyncScheduleRequest
 from .sync_schedule import first_sync_at, schedule_view
@@ -28,6 +29,7 @@ async def lifespan(app):
 app = FastAPI(title="ORVIBO_员工积分系统", version="1.0.0", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(presets_router)
+app.include_router(score_ledgers_router)
 
 
 @app.middleware("http")
