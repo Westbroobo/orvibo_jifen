@@ -29,4 +29,6 @@ cd /opt/orvibo_jifen && git pull --ff-only origin main && docker compose build a
 
 构建会复用已有依赖缓存。若更新包含数据库结构变更，先拉取代码，执行 `docker compose stop`，手动执行 [schema.sql](database/schema.sql) 末尾尚未应用的增量 SQL，再构建和启动容器。应用不会自动修改表结构。更新后可用 `docker compose ps` 查看容器状态。
 
+三个容器均提供健康检查。若登录正常但同步或通知停滞，执行 `docker compose logs --tail=100 worker`；数据库短暂断连时 worker 会自动重连。
+
 本次权限升级执行第八段增量。`INITIAL_ADMIN_USER_IDS` 配置的在职员工会一次性成为系统所有者，可在“权限管理”配置角色、员工查看范围并查看变更记录；旧管理员与操作员的功能和范围保留。
