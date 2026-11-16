@@ -38,6 +38,8 @@ function stepPoints(step: number) {
 const overrides = ref<Record<string, string>>({})
 const editingTotal = ref(false)
 const preview = ref<Preview | null>(null)
+const previewLoading = ref(false)
+const previewError = ref('')
 const previewPersonId = ref('')
 const confirmation = ref(false)
 const idempotency = ref('')
@@ -74,6 +76,21 @@ let resolveSequence = 0
 let detailSequence = 0
 let historySequence = 0
 let pageRequest: AbortController | undefined
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+let previewRequest: AbortController | undefined
+
+function cancelPreview() {
+  clearTimeout(previewTimer)
+  previewTimer = undefined
+  const request = previewRequest
+  previewRequest = undefined
+  previewLoading.value = false
+  request?.abort()
+}
+function invalidatePreview() {
+  cancelPreview()
+  preview.value = null; confirmation.value = false; idempotency.value = ''; previewError.value = ''
+}
 
 function cancelPageLoad() {
   pageRequest?.abort()
@@ -102,11 +119,11 @@ async function refreshIdentity(signal?: AbortSignal) {
   if (signal?.aborted) return
   user.value = current; setCsrf(current.csrf_token)
   if (previous && JSON.stringify([previous.role, previous.permissions, previous.history_scope, previous.ledger_scope, previous.ledger_department_ids, previous.status, previous.can_access_system]) !== JSON.stringify([current.role, current.permissions, current.history_scope, current.ledger_scope, current.ledger_department_ids, current.status, current.can_access_system])) {
-    preview.value = null; confirmation.value = false; idempotency.value = ''; recallConfirmation.value = null
+    invalidatePreview(); recallConfirmation.value = null
     history.value = []; historyTotal.value = 0; ++historySequence; closeDetail(); totals.value = {}
   }
   if (!authorized.value) {
-    clearTimeout(resolveTimer); ++resolveSequence; clearTimeout(previewTimer)
+    clearTimeout(resolveTimer); ++resolveSequence; invalidatePreview()
     rangeDialog.value = false; rangeReady.value = false; preview.value = null; confirmation.value = false; recallConfirmation.value = null; closeDetail()
     targets.value = []; overrides.value = {}; reason.value = ''; presetId.value = ''; presets.value = []
     directory.value = { people: [], departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false }
@@ -117,7 +134,7 @@ async function refreshIdentity(signal?: AbortSignal) {
 }
 let permissionRefresh: Promise<void> | undefined
 function permissionsDenied() {
-  if (!permissionRefresh) permissionRefresh = refreshIdentity().catch(() => { user.value = null; setCsrf(''); closeDetail() }).finally(() => { permissionRefresh = undefined })
+  if (!permissionRefresh) permissionRefresh = refreshIdentity().catch(() => { invalidatePreview(); user.value = null; setCsrf(''); closeDetail() }).finally(() => { permissionRefresh = undefined })
 }
 async function permissionsChanged() { await switchPage(page.value) }
 const delta = computed(() => operation.value === 'plus' ? points.value : -points.value)
@@ -127,7 +144,7 @@ const targetWarnings = computed(() => targetIds.value.flatMap(id => {
   const person = directory.value.people.find(p => p.id === id)
   return person?.status === 'active' ? [] : [`${person?.name ?? '已选人员'}当前不可用，请移除后重新选择。`]
 }))
-const validPreview = computed(() => preview.value && new Date(preview.value.expires_at).getTime() > clock.value)
+const validPreview = computed(() => !previewLoading.value && preview.value && new Date(preview.value.expires_at).getTime() > clock.value)
 const activeRow = computed(() => preview.value?.rows.find(row => row.person.id === draftPerson.value?.id) ?? preview.value?.rows[0])
 const draftPerson = computed(() => selectedPeople.value.find(person => person.id === previewPersonId.value) ?? selectedPeople.value[0])
 const totalErrors = computed(() => Object.fromEntries(selectedPeople.value.flatMap(person => {
@@ -160,6 +177,7 @@ const timeLabel = (value: string | null) => value ? new Date(value).toLocaleStri
 
 async function action(fn: () => Promise<void>) {
   if (busy.value) return
+  cancelPreview()
   cancelPageLoad()
   busy.value = true; error.value = ''; notice.value = ''
   try { await fn() } catch (e) { error.value = e instanceof Error ? e.message : '操作失败' } finally { busy.value = false }
@@ -204,13 +222,16 @@ async function refresh(signal?: AbortSignal) {
   }
 }
 function applyBalances(balances: Balances) {
+  const interrupted = !!previewRequest
+  if (interrupted) invalidatePreview()
   if (preview.value && (preview.value.month !== balances.month || preview.value.rows.some(row =>
     balances.versions ? row.balance_version !== (balances.versions[row.person.id] ?? 0)
       : row.before_total !== (balances.totals[row.person.id] ?? 60)))) {
-    preview.value = null; confirmation.value = false; idempotency.value = ''
+    invalidatePreview()
     notice.value = '积分已变化，请更新预览后再发送。'
   }
   totals.value = balances.totals; month.value = balances.month
+  if (interrupted) schedulePreview()
 }
 async function initialize() {
   try {
@@ -222,7 +243,7 @@ async function initialize() {
     }
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      user.value = null; setCsrf('')
+      invalidatePreview(); user.value = null; setCsrf('')
       if (!demoAvailable.value && !new URLSearchParams(location.search).has('login_error')) {
         redirectingToFeishu.value = true
         location.replace('/api/auth/login')
@@ -269,18 +290,21 @@ watch(notice, async (value) => {
 })
 function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
 function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
-onUnmounted(() => { cancelPageLoad(); window.removeEventListener('keydown', onKeydown); window.removeEventListener('permissions-denied', permissionsDenied); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(previewTimer); clearTimeout(noticeTimer) })
-let previewTimer: ReturnType<typeof setTimeout> | undefined
-const previewReady = computed(() => page.value === 'console' && can('adjustments.write') && !busy.value && !loadingPage.value && !editingTotal.value && !recipientsResolving.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && !totalWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
+onUnmounted(() => { cancelPreview(); cancelPageLoad(); window.removeEventListener('keydown', onKeydown); window.removeEventListener('permissions-denied', permissionsDenied); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(noticeTimer) })
+const previewReady = computed(() => authorized.value && page.value === 'console' && can('adjustments.write') && !busy.value && !loadingPage.value && !editingTotal.value && !recipientsResolving.value && !rangeDialog.value && !detail.value && !confirmation.value && !recallConfirmation.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && !totalWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
+function schedulePreview() {
+  clearTimeout(previewTimer)
+  if (previewReady.value && !preview.value && !previewLoading.value && !previewError.value) {
+    previewTimer = setTimeout(() => { previewTimer = undefined; void makePreview() }, 600)
+  }
+}
 watch([targets, targetWarnings, recipients, operation, points, reason, overrides, resolvedRecipients, recipientWarnings, recipientsResolving], () => {
-  clearTimeout(previewTimer)
-  preview.value = null; confirmation.value = false; idempotency.value = ''
-  if (!previewReady.value) return
-  previewTimer = setTimeout(() => { void makePreview() }, 600)
+  invalidatePreview()
+  schedulePreview()
 }, { deep: true })
-watch(editingTotal, value => {
-  clearTimeout(previewTimer)
-  if (!value && !preview.value && previewReady.value) previewTimer = setTimeout(() => { void makePreview() }, 600)
+watch(previewReady, value => {
+  if (value) schedulePreview()
+  else cancelPreview()
 })
 watch([recipients, directory], () => {
   clearTimeout(resolveTimer); const sequence = ++resolveSequence
@@ -301,21 +325,29 @@ function resetTotal() {
   if (cardPerson.value && !busy.value && !loadingPage.value) delete overrides.value[cardPerson.value.id]
 }
 async function makePreview() {
-  if (busy.value || loadingPage.value || editingTotal.value || page.value !== 'console') return
-  if (totalWarnings.value.length) { error.value = totalWarnings.value[0] ?? '请检查手动总分'; return }
-  if (recipientsResolving.value || !selectedPeople.value.length || targetWarnings.value.length || !reason.value.trim() || !resolvedRecipients.value.length || recipientWarnings.value.length) return
-  await action(async () => {
-    if (!Number.isInteger(points.value) || points.value <= 0) throw new Error('请输入正整数分值')
+  if (!previewReady.value || previewLoading.value) return
+  invalidatePreview()
+  if (!Number.isInteger(points.value) || points.value <= 0) { previewError.value = '请输入正整数分值'; return }
+  const request = new AbortController()
+  previewRequest = request; previewLoading.value = true
+  try {
     const values: Record<string, number> = {}
     targetIds.value.forEach(id => { if (overrides.value[id] !== undefined) values[id] = Number(overrides.value[id]) })
-    preview.value = await api<Preview>('/adjustments/preview', 'POST', { person_ids: targetIds.value, operation: operation.value, points: points.value, reason: reason.value, overrides: values, recipients: recipients.value })
+    const result = await api<Preview>('/adjustments/preview', 'POST', { person_ids: targetIds.value, operation: operation.value, points: points.value, reason: reason.value, overrides: values, recipients: recipients.value }, request.signal)
+    if (request.signal.aborted || previewRequest !== request || !previewReady.value) return
+    preview.value = result
     idempotency.value = crypto.randomUUID()
-  })
+  } catch (e) {
+    if (!request.signal.aborted && previewRequest === request) previewError.value = e instanceof ApiError && e.status === 408 ? '预览生成超时，请重试。' : e instanceof Error ? e.message : '预览生成失败，请重试。'
+  } finally {
+    if (previewRequest === request) { previewRequest = undefined; previewLoading.value = false }
+  }
 }
 async function commit() {
-  if (!preview.value || !validPreview.value) return
+  if (busy.value || loadingPage.value || !authorized.value || !can('adjustments.write') || !confirmation.value || !preview.value || !validPreview.value || !idempotency.value || new Date(preview.value.expires_at).getTime() <= Date.now()) return
+  const body = { preview_token: preview.value.preview_token, idempotency_key: idempotency.value }
   await action(async () => {
-    const result = await api<{ id: string }>('/adjustments', 'POST', { preview_token: preview.value!.preview_token, idempotency_key: idempotency.value })
+    const result = await api<{ id: string }>('/adjustments', 'POST', body)
     confirmation.value = false; preview.value = null; targets.value = []; overrides.value = {}; reason.value = ''
     if (can('history.read')) await loadDetail(result.id); await refresh(); notice.value = '积分已记账，通知正在发送。'
   })
@@ -361,7 +393,7 @@ function closeDetail() { ++detailSequence; detail.value = null }
 async function switchPage(value: typeof page.value) {
   if (busy.value) return
   cancelPageLoad()
-  clearTimeout(previewTimer)
+  cancelPreview()
   error.value = ''; notice.value = ''
   const request = new AbortController()
   pageRequest = request; loadingPage.value = true
@@ -378,7 +410,7 @@ async function switchPage(value: typeof page.value) {
   }
 }
 
-async function logout() { await action(async () => { await api('/auth/logout', 'POST'); user.value = null; closeDetail(); preview.value = null; setCsrf('') }) }
+async function logout() { await action(async () => { await api('/auth/logout', 'POST'); invalidatePreview(); user.value = null; closeDetail(); setCsrf('') }) }
 async function retry(id: string) { await action(async () => { await api(`/deliveries/${id}/retry`, 'POST'); await loadDetail(detail.value!.id, detail.value!.page); if (page.value === 'history') await loadHistory() }) }
 function changeHistoryPage(value: number) { historyPage.value = value; void switchPage('history') }
 function askBatchRecall(item: HistoryItem | BatchDetail) {
@@ -470,11 +502,13 @@ async function confirmRecall() {
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
-            <button class="primary-button form-submit" :class="{ busy }" type="submit" :disabled="!previewReady">{{ busy ? '正在处理…' : '更新预览' }}</button>
+            <button class="primary-button form-submit" :class="{ busy: previewLoading }" type="submit" :aria-busy="previewLoading" :disabled="!previewReady || previewLoading">{{ previewLoading ? '正在更新预览…' : '更新预览' }}</button>
             <p v-if="submitHint" class="hint submit-hint" aria-live="polite">{{ submitHint }}</p>
           </fieldset></form>
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
+          <p v-if="previewLoading" class="hint" role="status">正在更新预览…</p>
+          <p v-if="previewError" class="error-text" role="alert">{{ previewError }}</p>
           <select v-if="selectedPeople.length > 1" v-model="previewPersonId" aria-label="切换卡片预览人员"><option v-for="person in selectedPeople" :key="person.id" :value="person.id">{{ person.name }}</option></select>
           <CardPreview v-if="cardContext && cardPerson" :context="cardContext" :variables="activeRow?.card.data.template_variable" :avatar-url="cardPerson.avatar_url" editable-total :total-input="overrides[cardPerson.id]" :total-disabled="busy || loadingPage" :total-invalid="!!totalErrors[cardPerson.id]" @update-total="updateTotal" @reset-total="resetTotal" @editing-total="editingTotal = $event" /><div v-else class="empty-preview"><img class="empty-preview-logo" :src="logoUrl" alt="" width="36" height="36"><p>请选择记分对象</p></div>
           <div v-if="cardContext" class="total-guidance"><p><b>自动计算：</b>本月上一笔总分 + 本次加减分；本月首次记分从 60 分开始。</p><p><b>手动覆盖：</b>直接修改卡片里的“当前总分”，作为本次最终结果和后续记分起点，不再额外加减。点击“恢复自动”取消覆盖。</p></div>
@@ -482,7 +516,7 @@ async function confirmRecall() {
           <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button type="button" class="primary-button preview-send" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button></template>
         </aside>
         <div class="mobile-actions">
-          <button v-if="!preview" type="button" :disabled="!previewReady" @click="makePreview">{{ busy ? '正在处理…' : '更新预览' }}</button>
+          <button v-if="!preview" type="button" :aria-busy="previewLoading" :disabled="!previewReady || previewLoading" @click="makePreview">{{ previewLoading ? '正在更新预览…' : '更新预览' }}</button>
           <button v-else class="primary-button" type="button" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button>
         </div>
       </main>

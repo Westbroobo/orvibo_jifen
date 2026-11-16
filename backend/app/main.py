@@ -111,11 +111,14 @@ def accessible_batch(db, batch_id, user):
 
 @app.get("/api/adjustments")
 def history(page: int = Query(1, ge=1), user=Depends(auth.permission("history.read")), db=Depends(get_db)):
-    statement = select(Batch)
+    statement = select(Batch.id)
     if user.role != "owner" and user.history_scope != "all":
         statement = statement.where(Batch.operator_id == user.id)
     total = db.scalar(select(func.count()).select_from(statement.subquery()))
-    batches = db.scalars(statement.order_by(Batch.created_at.desc(), Batch.id).offset((page - 1) * 20).limit(20)).all()
+    # Sort only IDs: including large JSON snapshots can exhaust MySQL's sort buffer.
+    batch_ids = db.scalars(statement.order_by(Batch.created_at.desc(), Batch.id).offset((page - 1) * 20).limit(20)).all()
+    batches_by_id = {batch.id: batch for batch in db.scalars(select(Batch).where(Batch.id.in_(batch_ids)))} if batch_ids else {}
+    batches = [batches_by_id[batch_id] for batch_id in batch_ids if batch_id in batches_by_id]
     employee_ids = {batch.operator_id for batch in batches}
     employee_ids.update(row["person"]["id"] for batch in batches for row in batch.snapshot["rows"])
     avatars = dict(db.execute(select(Employee.id, Employee.avatar_url).where(Employee.id.in_(employee_ids))).all()) if employee_ids else {}
