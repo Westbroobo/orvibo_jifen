@@ -1,8 +1,7 @@
-from collections import Counter
 from datetime import timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from .permissions import require_permission, require_batch_operation
 from .cancellations import cancel_score
@@ -25,29 +24,62 @@ def can_recall(delivery, recall=None, when=None):
 
 
 def score_results(db, batch_id):
-    rows = db.execute(select(Ledger, LedgerCancellation).outerjoin(LedgerCancellation, LedgerCancellation.ledger_id == Ledger.id).where(
-        Ledger.batch_id == batch_id)).all()
+    # Read only score fields, not ledger card JSON, and fetch all balances together.
+    rows = db.execute(select(Ledger.id, Ledger.employee_id, Ledger.final_total, Balance.total,
+                             LedgerCancellation.ledger_id, LedgerCancellation.cancelled_at)
+                      .select_from(Ledger)
+                      .outerjoin(Balance, and_(Balance.employee_id == Ledger.employee_id, Balance.month == Ledger.month))
+                      .outerjoin(LedgerCancellation, LedgerCancellation.ledger_id == Ledger.id)
+                      .where(Ledger.batch_id == batch_id)).all()
     results = []
-    for ledger, cancellation in rows:
-        balance = db.get(Balance, (ledger.employee_id, ledger.month))
-        if not balance:
+    for ledger_id, employee_id, original_total, current_total, cancelled_id, cancelled_at in rows:
+        if current_total is None:
             raise HTTPException(409, "积分余额缺失，请核实这笔操作的记录")
-        results.append({"ledger_id": ledger.id, "person_id": ledger.employee_id,
-                        "original_total": ledger.final_total, "cancelled": cancellation is not None,
-                        "cancelled_at": cancellation.cancelled_at.isoformat() + "Z" if cancellation else None,
-                        "current_total": balance.total})
+        results.append({"ledger_id": ledger_id, "person_id": employee_id,
+                        "original_total": original_total, "cancelled": cancelled_id is not None,
+                        "cancelled_at": cancelled_at.isoformat() + "Z" if cancelled_at else None,
+                        "current_total": current_total})
     return results
 
 
-def recall_summary(db, batch_id, when=None):
+def batch_summaries(db, batch_ids, when=None):
+    """Aggregate the visible batches without loading every delivery or score row."""
+    result = {batch_id: {"delivery_statuses": {}, "statuses": {}, "available": 0, "cancelled_scores": 0}
+              for batch_id in batch_ids}
+    if not result:
+        return result
     when = when or now_utc()
-    rows = db.execute(select(Delivery, MessageRecall).join(Ledger, Delivery.ledger_id == Ledger.id)
+    # Keep this predicate equivalent to can_recall, including NULL retry error codes
+    # and the strict 24-hour boundary. LENGTH also accepts nonempty whitespace IDs.
+    available = and_(Delivery.status == "sent", func.length(Delivery.message_id) > 0,
+                     Delivery.sent_at > when - RECALL_WINDOW,
+                     or_(MessageRecall.delivery_id.is_(None),
+                         and_(MessageRecall.status.in_(("failed", "review")),
+                              or_(MessageRecall.error_code.is_(None), MessageRecall.error_code != 230009))))
+    rows = db.execute(select(Ledger.batch_id, Delivery.status, MessageRecall.status, func.count(),
+                             func.sum(case((available, 1), else_=0)))
+                      .select_from(Ledger)
+                      .join(Delivery, Delivery.ledger_id == Ledger.id)
                       .outerjoin(MessageRecall, MessageRecall.delivery_id == Delivery.id)
-                      .where(Ledger.batch_id == batch_id)).all()
-    scores = score_results(db, batch_id)
-    return {"statuses": dict(Counter(recall.status for _, recall in rows if recall)),
-            "available": sum(can_recall(delivery, recall, when) for delivery, recall in rows),
-            "cancelled_scores": sum(row["cancelled"] for row in scores), "scores": scores}
+                      .where(Ledger.batch_id.in_(result))
+                      .group_by(Ledger.batch_id, Delivery.status, MessageRecall.status))
+    for batch_id, status, recall_status, count, recall_available in rows:
+        summary = result[batch_id]
+        summary["delivery_statuses"][status] = summary["delivery_statuses"].get(status, 0) + count
+        if recall_status is not None:
+            summary["statuses"][recall_status] = summary["statuses"].get(recall_status, 0) + count
+        summary["available"] += int(recall_available)
+    # Count ledgers separately so multiple recipients never multiply cancellations.
+    cancellations = db.execute(select(Ledger.batch_id, func.count())
+                               .join(LedgerCancellation, LedgerCancellation.ledger_id == Ledger.id)
+                               .where(Ledger.batch_id.in_(result)).group_by(Ledger.batch_id))
+    for batch_id, count in cancellations:
+        result[batch_id]["cancelled_scores"] = count
+    return result
+
+
+def recall_summary(db, batch_id, when=None):
+    return {**batch_summaries(db, [batch_id], when)[batch_id], "scores": score_results(db, batch_id)}
 
 
 def enqueue_recall(db, delivery, user, when):

@@ -1,4 +1,3 @@
-from collections import Counter
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -15,8 +14,8 @@ from .models import Balance, Batch, Delivery, Employee, Ledger, MessageRecall, S
 from .presets import router as presets_router
 from .score_ledgers import router as score_ledgers_router
 from .authorization import router as authorization_router
-from .permissions import history_visible, can_operate_batch, require_permission, require_manager, is_manager
-from .recall import can_recall, recall_deadline, recall_summary, request_recall
+from .permissions import history_visible, can_operate_batch, function_permissions, require_permission, require_manager, is_manager
+from .recall import batch_summaries, can_recall, recall_deadline, recall_summary, request_recall
 from .schemas import AdjustmentRequest, CommitRequest, RoleRequest, Selection, SyncScheduleRequest
 from .sync_schedule import first_sync_at, schedule_view
 
@@ -125,9 +124,10 @@ def history(page: int = Query(1, ge=1), user=Depends(auth.permission("history.re
     avatars = dict(db.execute(select(Employee.id, Employee.avatar_url).where(Employee.id.in_(employee_ids))).all()) if employee_ids else {}
     result = []
     when = now_utc()
+    summaries = batch_summaries(db, batch_ids, when)
+    granted = set(function_permissions(db, user))
     for batch in batches:
-        statuses = db.scalars(select(Delivery.status).join(Ledger, Delivery.ledger_id == Ledger.id).where(Ledger.batch_id == batch.id)).all()
-        summary = recall_summary(db, batch.id, when)
+        summary = summaries[batch.id]
         people = [{"id": row["person"]["id"], "name": row["person"]["name"],
                    "avatar_url": avatars.get(row["person"]["id"]) or row["person"].get("avatar_url", "")}
                   for row in batch.snapshot["rows"]]
@@ -135,11 +135,11 @@ def history(page: int = Query(1, ge=1), user=Depends(auth.permission("history.re
                        "created_at": batch.created_at.isoformat() + "Z", "operator_name": batch.snapshot["operator_name"],
                        "operator_avatar_url": avatars.get(batch.operator_id) or "",
                        "people": people, "names": [person["name"] for person in people],
-                       "message_count": batch.snapshot["message_count"], "statuses": dict(Counter(statuses)),
+                       "message_count": batch.snapshot["message_count"], "statuses": summary["delivery_statuses"],
                        "recall_statuses": summary["statuses"], "recall_available": summary["available"],
                        "cancelled_scores": summary["cancelled_scores"],
-                       "can_recall": can_operate_batch(db, user, batch, "history.recall"),
-                       "can_retry": can_operate_batch(db, user, batch, "history.retry")})
+                       "can_recall": can_operate_batch(db, user, batch, "history.recall", granted=granted),
+                       "can_retry": can_operate_batch(db, user, batch, "history.retry", granted=granted)})
     return {"items": result, "total": total, "page": page}
 
 
@@ -150,17 +150,17 @@ def batch_detail(batch_id: str, page: int = Query(1, ge=1),
     batch = accessible_batch(db, batch_id, user)
     base = select(Delivery, Ledger.employee_id, MessageRecall).join(Ledger, Delivery.ledger_id == Ledger.id).outerjoin(
         MessageRecall, MessageRecall.delivery_id == Delivery.id).where(Ledger.batch_id == batch.id)
-    statuses = db.scalars(select(Delivery.status).join(Ledger, Delivery.ledger_id == Ledger.id).where(Ledger.batch_id == batch.id)).all()
-    counts = dict(Counter(statuses))
-    total = len(statuses) if delivery_status == "all" else counts.get(delivery_status, 0)
+    when = now_utc()
+    summary = recall_summary(db, batch.id, when)
+    counts = summary["delivery_statuses"]
+    total = sum(counts.values()) if delivery_status == "all" else counts.get(delivery_status, 0)
     if delivery_status != "all":
         base = base.where(Delivery.status == delivery_status)
     page = min(page, max(1, (total + 99) // 100))
     rows = []
-    when = now_utc()
-    summary = recall_summary(db, batch.id, when)
-    allow_recall = can_operate_batch(db, user, batch, "history.recall")
-    allow_retry = can_operate_batch(db, user, batch, "history.retry")
+    granted = set(function_permissions(db, user))
+    allow_recall = can_operate_batch(db, user, batch, "history.recall", granted=granted)
+    allow_retry = can_operate_batch(db, user, batch, "history.retry", granted=granted)
     for delivery, person_id, recall in db.execute(base.order_by(Delivery.recipient_name, Delivery.id).offset((page - 1) * 100).limit(100)):
         rows.append({"id": delivery.id, "person_id": person_id, "recipient_name": delivery.recipient_name,
                      "status": delivery.status, "attempts": delivery.attempts, "message_id": delivery.message_id,

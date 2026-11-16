@@ -72,8 +72,9 @@ def history_visible(user, batch):
     return user.role == "owner" or user.history_scope == "all" or batch.operator_id == user.id
 
 
-def can_operate_batch(db, user, batch, permission):
-    granted = set(function_permissions(db, user))
+def can_operate_batch(db, user, batch, permission, *, granted=None):
+    if granted is None:
+        granted = set(function_permissions(db, user))
     return (history_visible(user, batch) and "history.read" in granted and permission in granted
             and (batch.operator_id == user.id or "history.others" in granted))
 

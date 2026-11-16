@@ -74,10 +74,13 @@ let timer: ReturnType<typeof setInterval> | undefined
 let resolveTimer: ReturnType<typeof setTimeout> | undefined
 let resolveSequence = 0
 let detailSequence = 0
+let detailRequest: AbortController | undefined
 let historySequence = 0
 let pageRequest: AbortController | undefined
 let previewTimer: ReturnType<typeof setTimeout> | undefined
 let previewRequest: AbortController | undefined
+let cancellationBalanceVersion = 0
+let refreshedCancellationBalanceVersion = 0
 
 function cancelPreview() {
   clearTimeout(previewTimer)
@@ -215,9 +218,12 @@ watch(rangeDialog, async (value) => {
 })
 async function refresh(signal?: AbortSignal) {
   if (!authorized.value) return
+  const cancellationVersion = cancellationBalanceVersion
   const [data, balances, configs] = await Promise.all([api<Directory>('/directory', 'GET', undefined, signal), can('adjustments.write') ? api<Balances>('/balances', 'GET', undefined, signal) : Promise.resolve(null), api<Preset[]>('/presets', 'GET', undefined, signal)])
   if (signal?.aborted || !authorized.value) return
-  directory.value = data; if (balances) applyBalances(balances); presets.value = configs
+  directory.value = data
+  if (balances) { applyBalances(balances); refreshedCancellationBalanceVersion = cancellationVersion }
+  presets.value = configs
   if (presetId.value) {
     if (!configs.some(p => p.id === presetId.value)) { presetId.value = ''; notice.value = '原发送名单已删除，请重新选择。' }
     loadPreset()
@@ -234,6 +240,22 @@ function applyBalances(balances: Balances) {
   }
   totals.value = balances.totals; month.value = balances.month
   if (interrupted) schedulePreview()
+}
+let cancellationBalanceRefresh: Promise<void> | undefined
+function refreshCancellationBalances(changed = false) {
+  if (changed) ++cancellationBalanceVersion
+  if (!can('adjustments.write') || cancellationBalanceVersion === refreshedCancellationBalanceVersion) return Promise.resolve()
+  if (!cancellationBalanceRefresh) {
+    const employeeId = user.value?.id
+    const cancellationVersion = cancellationBalanceVersion
+    cancellationBalanceRefresh = api<Balances>('/balances').then(balances => {
+      if (user.value?.id === employeeId && can('adjustments.write')) {
+        applyBalances(balances)
+        refreshedCancellationBalanceVersion = cancellationVersion
+      }
+    }).finally(() => { cancellationBalanceRefresh = undefined })
+  }
+  return cancellationBalanceRefresh
 }
 async function initialize() {
   try {
@@ -262,7 +284,8 @@ onMounted(async () => {
   await initialize()
   timer = setInterval(() => {
     clock.value = Date.now()
-    if (!busy.value && !recallConfirmation.value) {
+    if (!document.hidden && !busy.value && !recallConfirmation.value) {
+      if (cancellationBalanceVersion !== refreshedCancellationBalanceVersion) void refreshCancellationBalances().catch(() => {})
       if (detail.value && (detail.value.statuses.pending || detail.value.statuses.sending || detail.value.recall_statuses?.pending || detail.value.recall_statuses?.recalling)) void loadDetail(detail.value.id, detail.value.page, true).catch(() => {})
       if (page.value === 'history' && !loadingHistory.value && history.value.some(item => item.recall_statuses?.pending || item.recall_statuses?.recalling)) void loadHistory().catch(() => {})
     }
@@ -292,7 +315,7 @@ watch(notice, async (value) => {
 })
 function pauseNotice() { noticePaused.value = true; clearTimeout(noticeTimer) }
 function resumeNotice() { noticePaused.value = false; if (notice.value) noticeTimer = setTimeout(() => { notice.value = '' }, 5000) }
-onUnmounted(() => { cancelPreview(); cancelPageLoad(); window.removeEventListener('keydown', onKeydown); window.removeEventListener('permissions-denied', permissionsDenied); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(noticeTimer) })
+onUnmounted(() => { cancelPreview(); cancelPageLoad(); closeDetail(); window.removeEventListener('keydown', onKeydown); window.removeEventListener('permissions-denied', permissionsDenied); clearInterval(timer); clearTimeout(resolveTimer); clearTimeout(noticeTimer) })
 const previewReady = computed(() => authorized.value && page.value === 'console' && can('adjustments.write') && !busy.value && !loadingPage.value && !editingTotal.value && !recipientsResolving.value && !rangeDialog.value && !detail.value && !confirmation.value && !recallConfirmation.value && selectedPeople.value.length > 0 && !targetWarnings.value.length && !totalWarnings.value.length && reason.value.trim().length > 0 && resolvedRecipients.value.length > 0 && !recipientWarnings.value.length)
 function schedulePreview() {
   clearTimeout(previewTimer)
@@ -379,19 +402,29 @@ async function loadHistory(signal?: AbortSignal) {
   loadingHistory.value = true
   try {
     const result = await api<{ items: HistoryItem[]; total: number }>('/adjustments?page=' + historyPage.value, 'GET', undefined, signal)
-    const balances = can('adjustments.write') ? await api<Balances>('/balances', 'GET', undefined, signal) : null
     if (signal?.aborted || sequence !== historySequence) return
-    history.value = result.items; historyTotal.value = result.total; if (balances) applyBalances(balances)
+    const cancelled = result.items.some(item => history.value.some(previous => previous.id === item.id && previous.cancelled_scores !== item.cancelled_scores))
+    history.value = result.items; historyTotal.value = result.total
+    if (cancelled) await refreshCancellationBalances(true)
   } finally { if (sequence === historySequence) loadingHistory.value = false }
 }
 async function loadDetail(id: string, selectedPage = 1, polling = false, deliveryStatus: DeliveryStatusFilter = detail.value?.id === id ? detail.value.delivery_status : 'all') {
+  if (polling && detailRequest) return
+  detailRequest?.abort()
+  const request = new AbortController()
+  detailRequest = request
   const sequence = ++detailSequence
-  const result = await api<BatchDetail>(`/adjustments/${id}?page=${selectedPage}&delivery_status=${deliveryStatus}`)
-  const balances = can('adjustments.write') ? await api<Balances>('/balances') : null
-  if (sequence !== detailSequence || polling && detail.value?.id !== id) return
-  detail.value = result; if (balances) applyBalances(balances)
+  try {
+    const result = await api<BatchDetail>(`/adjustments/${id}?page=${selectedPage}&delivery_status=${deliveryStatus}`, 'GET', undefined, request.signal)
+    if (request.signal.aborted || sequence !== detailSequence || polling && detail.value?.id !== id) return
+    const cancelled = detail.value?.id === id && detail.value.cancelled_scores !== result.cancelled_scores
+    detail.value = result
+    if (cancelled) await refreshCancellationBalances(true)
+  } catch (e) {
+    if (!request.signal.aborted) throw e
+  } finally { if (detailRequest === request) detailRequest = undefined }
 }
-function closeDetail() { ++detailSequence; detail.value = null }
+function closeDetail() { ++detailSequence; detailRequest?.abort(); detailRequest = undefined; detail.value = null }
 async function switchPage(value: typeof page.value) {
   if (busy.value) return
   cancelPageLoad()

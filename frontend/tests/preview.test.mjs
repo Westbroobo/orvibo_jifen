@@ -88,13 +88,14 @@ async function mount(t) {
   globalThis.requestAnimationFrame = callback => setTimeout(callback, 0)
   globalThis.cancelAnimationFrame = clearTimeout
   const previews = [], commits = [], detailRequests = [], retryRequests = [], dialogs = []
-  let currentUser = user, identityReads = 0
+  const detailResponses = [], balanceResponses = []
+  let currentUser = user, identityReads = 0, balanceReads = 0, historyItems = [], detailChanges = {}
   globalThis.fetch = (url, options) => {
     const path = url.split('?')[0]
     if (path === '/api/public-config') return Promise.resolve(reply({ demo_mode: true }))
     if (path === '/api/auth/me') { identityReads++; return Promise.resolve(reply(currentUser)) }
     if (path === '/api/directory') return Promise.resolve(reply({ people, departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false }))
-    if (path === '/api/balances') return Promise.resolve(reply({ month: '2026-11', totals: { p1: 60 }, versions: { p1: 0 } }))
+    if (path === '/api/balances') { balanceReads++; return balanceResponses.shift()?.promise ?? Promise.resolve(reply({ month: '2026-11', totals: { p1: 60 }, versions: { p1: 0 } })) }
     if (path === '/api/presets') return Promise.resolve(reply([{ id: 'preset', name: '测试名单', scope: 'personal', can_edit: true, selection }]))
     if (path === '/api/ranges/resolve') return Promise.resolve(reply({ people: JSON.parse(options.body).person_ids?.length ? people : [], warnings: [] }))
     if (path === '/api/adjustments/preview' || path === '/api/adjustments' && options.method === 'POST') {
@@ -102,19 +103,23 @@ async function mount(t) {
       ;(path.endsWith('/preview') ? previews : commits).push(pending)
       return pending.promise
     }
-    if (path === '/api/adjustments') return Promise.resolve(reply({ items: [], total: 0, page: 1 }))
+    if (path === '/api/adjustments') return Promise.resolve(reply({ items: historyItems, total: historyItems.length, page: 1 }))
     if (path.startsWith('/api/adjustments/')) {
       const query = new URL(url, 'http://localhost').searchParams
       const filter = query.get('delivery_status') ?? 'all'
       const page = Number(query.get('page') ?? 1)
       detailRequests.push({ id: path.split('/').at(-1), filter, page })
       const statuses = retryRequests.length ? { sent: 519 } : { sent: 314, failed: 205 }
-      return Promise.resolve(reply({
+      const result = {
         id: path.split('/').at(-1), snapshot: { rows: [], recipients: people, message_count: 519, month: '2026-11', delta: 5, reason: '测试批次', operator_name: '张三' },
         scores: [], created_at: new Date(Date.now()).toISOString(), deliveries: [], statuses,
         total: filter === 'all' ? 519 : statuses[filter] ?? 0, page, delivery_status: filter,
         recall_statuses: {}, recall_available: 0, cancelled_scores: 0, can_recall: false, can_retry: true,
-      }))
+        ...detailChanges,
+      }
+      const pending = detailResponses.shift()
+      if (pending) { pending.result = result; pending.signal = options.signal; return pending.promise }
+      return Promise.resolve(reply(result))
     }
     if (path.startsWith('/api/deliveries/') && path.endsWith('/retry')) { retryRequests.push(path); return Promise.resolve(reply({ ok: true })) }
     if (path === '/api/auth/logout') return Promise.resolve(reply({ ok: true }))
@@ -149,6 +154,9 @@ async function mount(t) {
     return root
   }
   return { root, find, component, fieldset, reason, input, advance, previews, commits, complete, app, detailRequests, retryRequests, mountDialog,
+    holdDetail: () => { const pending = deferred(); detailResponses.push(pending); return pending },
+    holdBalances: () => { const pending = deferred(); balanceResponses.push(pending); return pending },
+    setDetail: changes => { detailChanges = changes }, setHistory: items => { historyItems = items }, get balanceReads() { return balanceReads },
     setUser: changes => { currentUser = { ...user, ...changes } }, get identityReads() { return identityReads } }
 }
 
@@ -426,4 +434,100 @@ test('result dialog shows global status counts, filtered pagination and retry ac
   await settle()
   assert.equal(text(empty).includes('暂无符合该状态的通知'), true)
   assert.equal(text(empty).includes('筛选结果 0 条'), true)
+})
+
+test('slow detail polling stays single flight and pauses while the tab is hidden', async t => {
+  const h = await mount(t)
+  await h.find(node => node.tag === 'button' && text(node) === '发送记录').props.onClick(); await settle()
+  h.setDetail({ statuses: { pending: 519 } })
+  await h.component('SendingHistory').props.onFailed('batch-1'); await settle()
+  const balances = h.balanceReads
+  const pending = h.holdDetail()
+  await h.advance(3000)
+  assert.equal(h.detailRequests.length, 2)
+  await h.advance(9000)
+  assert.equal(h.detailRequests.length, 2, 'slow requests must not create overlapping polls')
+  assert.deepEqual(h.detailRequests.at(-1), { id: 'batch-1', filter: 'failed', page: 1 })
+  pending.resolve(reply(pending.result)); await settle()
+  document.hidden = true
+  await h.advance(6000)
+  assert.equal(h.detailRequests.length, 2)
+  document.hidden = false
+  await h.advance(3000)
+  assert.equal(h.detailRequests.length, 3)
+  assert.equal(h.balanceReads, balances, 'unchanged scores must not reload all balances')
+})
+
+test('manual filters supersede a pending poll and closing aborts late detail responses', async t => {
+  const h = await mount(t)
+  await h.find(node => node.tag === 'button' && text(node) === '发送记录').props.onClick(); await settle()
+  h.setDetail({ statuses: { pending: 519 } })
+  await h.component('SendingHistory').props.onFailed('batch-1'); await settle()
+  const superseded = h.holdDetail()
+  await h.advance(3000)
+  await h.component('BatchResultDialog').props.onChangeStatus('sent'); await settle()
+  assert.equal(superseded.signal.aborted, true)
+  superseded.resolve(reply(superseded.result)); await settle()
+  assert.equal(h.component('BatchResultDialog').props.detail.delivery_status, 'sent')
+
+  const closed = h.holdDetail()
+  await h.advance(3000)
+  h.component('BatchResultDialog').props.onClose(); await settle()
+  assert.equal(closed.signal.aborted, true)
+  await h.component('SendingHistory').props.onDetail('batch-2'); await settle()
+  closed.resolve(reply(closed.result)); await settle()
+  assert.equal(h.component('BatchResultDialog').props.detail.id, 'batch-2')
+  assert.equal(h.component('BatchResultDialog').props.detail.delivery_status, 'all')
+})
+
+test('viewing and retrying results skip balances while score cancellations refresh them once', async t => {
+  const h = await mount(t)
+  const originalBalances = h.balanceReads
+  await h.find(node => node.tag === 'button' && text(node) === '发送记录').props.onClick(); await settle()
+  h.setHistory([{ id: 'batch-1', cancelled_scores: 0, recall_statuses: {} }])
+  await h.component('SendingHistory').props.onRefresh(); await settle()
+  await h.component('SendingHistory').props.onFailed('batch-1'); await settle()
+  await h.component('BatchResultDialog').props.onChangePage(2); await settle()
+  await h.component('BatchResultDialog').props.onRefresh(); await settle()
+  await h.component('BatchResultDialog').props.onRetry('failed-1'); await settle()
+  assert.equal(h.balanceReads, originalBalances)
+
+  h.setDetail({ statuses: { pending: 519 } })
+  await h.component('BatchResultDialog').props.onRefresh(); await settle()
+  const balances = h.holdBalances()
+  h.setDetail({ cancelled_scores: 1, statuses: { pending: 519 } })
+  await h.advance(3000)
+  h.setHistory([{ id: 'batch-1', cancelled_scores: 1, recall_statuses: {} }])
+  const changedHistory = h.component('SendingHistory').props.onRefresh()
+  await settle()
+  assert.equal(h.balanceReads, originalBalances + 1, 'list and detail must share the balance refresh')
+  balances.resolve(reply({ month: '2026-11', totals: { p1: 55 }, versions: { p1: 1 } }))
+  await changedHistory; await settle()
+  await h.component('BatchResultDialog').props.onRefresh(); await settle()
+  assert.equal(h.balanceReads, originalBalances + 1)
+  h.component('BatchResultDialog').props.onClose(); await settle()
+  await h.find(node => node.tag === 'button' && text(node) === '操作台').props.onClick(); await settle()
+  assert.equal(h.balanceReads, originalBalances + 2, 'returning to the editor obtains current balances')
+})
+
+test('failed cancellation balance refresh retries even after recall polling finishes', async t => {
+  const h = await mount(t)
+  await h.find(node => node.tag === 'button' && text(node) === '发送记录').props.onClick(); await settle()
+  await h.component('SendingHistory').props.onDetail('batch-1'); await settle()
+  const originalBalances = h.balanceReads
+  const failed = h.holdBalances()
+  h.setDetail({ cancelled_scores: 1 })
+  const refreshed = h.component('BatchResultDialog').props.onRefresh()
+  await settle()
+  failed.resolve(reply({ detail: '余额暂时无法读取' }, 503))
+  await refreshed; await settle()
+  assert.equal(h.balanceReads, originalBalances + 1)
+  assert.deepEqual(h.component('BatchResultDialog').props.detail.recall_statuses, {})
+
+  const recovered = h.holdBalances()
+  await h.advance(3000)
+  assert.equal(h.balanceReads, originalBalances + 2)
+  recovered.resolve(reply({ month: '2026-11', totals: { p1: 55 }, versions: { p1: 1 } })); await settle()
+  await h.advance(6000)
+  assert.equal(h.balanceReads, originalBalances + 2, 'successful recovery must stop balance retries')
 })
