@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
 import { unionSelection } from './types'
 import { displayRoleName } from './roles'
-import type { BatchDetail, CardContext, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
+import type { BatchDetail, CardContext, DeliveryStatusFilter, Directory, HistoryItem, Person, Preset, Preview, User } from './types'
 import PersonMultiSelect from './components/PersonMultiSelect.vue'
 import CardPreview from './components/CardPreview.vue'
 import EmployeeAvatar from './components/EmployeeAvatar.vue'
@@ -167,6 +167,8 @@ const draftContext = computed<CardContext | null>(() => {
 })
 const cardContext = computed(() => activeRow.value?.context ?? draftContext.value)
 const cardPerson = computed(() => activeRow.value?.person ?? draftPerson.value)
+const previewRecipients = computed(() => preview.value?.recipients ?? resolvedRecipients.value)
+const previewMessageCount = computed(() => preview.value?.message_count ?? selectedPeople.value.length * resolvedRecipients.value.length)
 watch(targetIds, ids => {
   for (const id of Object.keys(overrides.value)) if (!ids.includes(id)) delete overrides.value[id]
 })
@@ -382,9 +384,9 @@ async function loadHistory(signal?: AbortSignal) {
     history.value = result.items; historyTotal.value = result.total; if (balances) applyBalances(balances)
   } finally { if (sequence === historySequence) loadingHistory.value = false }
 }
-async function loadDetail(id: string, selectedPage = 1, polling = false) {
+async function loadDetail(id: string, selectedPage = 1, polling = false, deliveryStatus: DeliveryStatusFilter = detail.value?.id === id ? detail.value.delivery_status : 'all') {
   const sequence = ++detailSequence
-  const result = await api<BatchDetail>(`/adjustments/${id}?page=${selectedPage}`)
+  const result = await api<BatchDetail>(`/adjustments/${id}?page=${selectedPage}&delivery_status=${deliveryStatus}`)
   const balances = can('adjustments.write') ? await api<Balances>('/balances') : null
   if (sequence !== detailSequence || polling && detail.value?.id !== id) return
   detail.value = result; if (balances) applyBalances(balances)
@@ -502,26 +504,25 @@ async function confirmRecall() {
               <p v-for="warning in recipientWarnings" :key="warning" class="error-text">{{ warning }}</p>
             </div>
             <div class="send-summary"><b>{{ selectedPeople.length }}</b> 位记分对象 · <b>{{ resolvedRecipients.length }}</b> 位通知对象 · <b>{{ selectedPeople.length * resolvedRecipients.length }}</b> 条卡片</div>
-            <button class="primary-button form-submit" :class="{ busy: previewLoading }" type="submit" :aria-busy="previewLoading" :disabled="!previewReady || previewLoading">{{ previewLoading ? '正在更新预览…' : '更新预览' }}</button>
+            <button class="primary-button form-submit preview-update" type="submit" :aria-busy="previewLoading" :disabled="!previewReady || previewLoading">更新预览</button>
             <p v-if="submitHint" class="hint submit-hint" aria-live="polite">{{ submitHint }}</p>
           </fieldset></form>
         </section>
         <aside class="panel preview-panel"><div class="panel-head"><h2 class="panel-title">卡片预览</h2></div>
-          <p v-if="previewLoading" class="hint" role="status">正在更新预览…</p>
-          <p v-if="previewError" class="error-text" role="alert">{{ previewError }}</p>
+          <div class="preview-status"><p v-if="previewError" class="error-text" role="alert">{{ previewError }}</p><p v-else class="hint" role="status">{{ previewLoading ? '正在更新预览…' : preview ? validPreview ? '预览已更新' : '预览已过期，请更新预览。' : submitHint || '等待更新预览' }}</p></div>
           <select v-if="selectedPeople.length > 1" v-model="previewPersonId" aria-label="切换卡片预览人员"><option v-for="person in selectedPeople" :key="person.id" :value="person.id">{{ person.name }}</option></select>
           <CardPreview v-if="cardContext && cardPerson" :context="cardContext" :variables="activeRow?.card.data.template_variable" :avatar-url="cardPerson.avatar_url" editable-total :total-input="overrides[cardPerson.id]" :total-disabled="busy || loadingPage" :total-invalid="!!totalErrors[cardPerson.id]" @update-total="updateTotal" @reset-total="resetTotal" @editing-total="editingTotal = $event" /><div v-else class="empty-preview"><img class="empty-preview-logo" :src="logoUrl" alt="" width="36" height="36"><p>请选择记分对象</p></div>
           <div v-if="cardContext" class="total-guidance"><p><b>自动计算：</b>本月上一笔总分 + 本次加减分；本月首次记分从 60 分开始。</p><p><b>手动覆盖：</b>直接修改卡片里的“当前总分”，作为本次最终结果和后续记分起点，不再额外加减。点击“恢复自动”取消覆盖。</p></div>
           <p v-for="warning in totalWarnings" :key="warning" class="error-text" role="alert">{{ warning }}</p>
-          <template v-if="preview"><div class="preview-details"><p><b>{{ preview.recipients.length }}</b> 位通知对象 · <b>{{ preview.message_count }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in preview.recipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>有效至 {{ timeLabel(preview.expires_at) }}</small></div><p v-if="!validPreview" class="error-text">预览已过期，请更新预览。</p><button type="button" class="primary-button preview-send" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button></template>
+          <template v-if="cardContext"><div class="preview-details"><p><b>{{ previewRecipients.length }}</b> 位通知对象 · <b>{{ previewMessageCount }}</b> 条卡片</p><details><summary>通知名单</summary><div class="chips"><span v-for="person in previewRecipients" :key="person.id" class="chip"><EmployeeAvatar :src="person.avatar_url" :name="person.name" size="tiny" />{{ person.name }}</span></div></details><small>{{ preview ? `有效至 ${timeLabel(preview.expires_at)}` : '等待生成最新预览' }}</small></div><button type="button" class="primary-button preview-send" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button></template>
         </aside>
         <div class="mobile-actions">
-          <button v-if="!preview" type="button" :aria-busy="previewLoading" :disabled="!previewReady || previewLoading" @click="makePreview">{{ previewLoading ? '正在更新预览…' : '更新预览' }}</button>
-          <button v-else class="primary-button" type="button" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button>
+          <button class="preview-update" type="button" :aria-busy="previewLoading" :disabled="!previewReady || previewLoading" @click="makePreview">更新预览</button>
+          <button class="primary-button" type="button" :disabled="busy || loadingPage || !validPreview" @click="confirmation = true">核对并发送</button>
         </div>
       </main>
       <RecipientLists v-else-if="page === 'lists'" :presets="presets" :directory="directory" :user="user" :loading="loadingPage" @working="busy = $event" @saved="savedPreset" @deleted="deletedPreset" />
-      <SendingHistory v-else-if="page === 'history'" :items="history" :total="historyTotal" :page="historyPage" :loading="loadingHistory" :busy="busy" @refresh="switchPage('history')" @change-page="changeHistoryPage" @detail="action(() => loadDetail($event))" @recall="askBatchRecall" />
+      <SendingHistory v-else-if="page === 'history'" :items="history" :total="historyTotal" :page="historyPage" :loading="loadingHistory" :busy="busy" @refresh="switchPage('history')" @change-page="changeHistoryPage" @detail="action(() => loadDetail($event))" @failed="action(() => loadDetail($event, 1, false, 'failed'))" @recall="askBatchRecall" />
       <ScoreLedger v-else-if="page === 'ledger' && can('ledgers.read')" :key="`${user.role}:${user.ledger_scope}:${user.ledger_department_ids.join(',')}:${user.permissions.join(',')}`" :current-month="month" :can-export="can('ledgers.export')" />
       <PermissionsPanel v-else-if="page === 'admin' && user.can_manage" :directory="directory" :user="user" :busy="busy || loadingPage" @synced="switchPage('admin')" @changed="permissionsChanged" />
       <OperationManual v-else-if="page === 'guide'" />
@@ -532,7 +533,7 @@ async function confirmRecall() {
   <Transition name="modal">
   <div v-if="confirmation && preview" class="modal-backdrop" @click.self="!busy && (confirmation = false)"><section class="panel modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><h2 id="confirm-title" class="panel-title">确认发送</h2><p>{{ preview.rows.length }} 人 · 每人{{ preview.delta > 0 ? '加' : '扣' }} {{ Math.abs(preview.delta) }} 分</p><p class="reason-box">{{ preview.reason }}</p><div v-for="row in preview.rows" :key="row.person.id" class="confirm-total"><EmployeeAvatar :src="row.person.avatar_url" :name="row.person.name" size="small" /><span>{{ row.person.name }}</span><b>{{ row.before_total }} → {{ row.final_total }} 分</b><small v-if="row.override_total !== null">手动覆盖</small></div><p>{{ preview.recipients.length }} 位通知对象 · {{ preview.message_count }} 条卡片</p><p class="hint">确认后记分生效，失败通知可重试。</p><div class="modal-actions"><button type="button" :disabled="busy" @click="confirmation = false">返回</button><button ref="confirmSend" type="button" class="primary-button" :class="{ busy }" :disabled="busy || loadingPage || !validPreview" @click="commit">{{ busy ? '正在提交…' : '确认发送' }}</button></div></section></div></Transition>
   <Transition name="modal">
-  <BatchResultDialog v-if="detail" ref="detailPanel" :detail="detail" :busy="busy" :error="error" :clock="clock" :confirming-recall="!!recallConfirmation" @close="closeDetail" @refresh="action(() => loadDetail(detail!.id, detail!.page))" @recall="askBatchRecall" @retry="retry" @change-page="action(() => loadDetail(detail!.id, $event))" />
+  <BatchResultDialog v-if="detail" ref="detailPanel" :detail="detail" :busy="busy" :error="error" :clock="clock" :confirming-recall="!!recallConfirmation" @close="closeDetail" @refresh="action(() => loadDetail(detail!.id, detail!.page))" @recall="askBatchRecall" @retry="retry" @change-page="action(() => loadDetail(detail!.id, $event))" @change-status="action(() => loadDetail(detail!.id, 1, false, $event))" />
 </Transition>
   <Transition name="modal">
   <div v-if="recallConfirmation" class="modal-backdrop recall-confirmation" @click.self="!busy && (recallConfirmation = null)">

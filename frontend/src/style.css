@@ -129,6 +129,10 @@ button:active:not(:disabled){transform:translateY(1px)}
 .primary-button:hover:not(:disabled){background:var(--accent-pressed);border-color:var(--accent-pressed)}
 .primary-button:disabled{background:#E0E4EA;border-color:#C5CDD8;color:#687381;opacity:1}
 .preview-panel{position:sticky;top:24px}
+.preview-status{min-height:24px;margin-bottom:12px;line-height:24px}
+.preview-status p{margin:0}
+.preview-update:disabled[aria-busy=true]{opacity:1}
+.primary-button.preview-update:disabled[aria-busy=true]{background:var(--accent-deep);border-color:var(--accent-deep);color:white}
 .preview-panel>select{margin-bottom:16px}
 .total-guidance{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:var(--fs-xs);color:var(--muted);line-height:1.8}
 .total-guidance p{margin:0}.total-guidance p+p{margin-top:6px}.total-guidance b{color:var(--text);font-weight:700}

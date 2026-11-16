@@ -1,5 +1,6 @@
 from collections import Counter
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import func, select
@@ -143,11 +144,18 @@ def history(page: int = Query(1, ge=1), user=Depends(auth.permission("history.re
 
 
 @app.get("/api/adjustments/{batch_id}")
-def batch_detail(batch_id: str, page: int = Query(1, ge=1), user=Depends(auth.permission("history.read")), db=Depends(get_db)):
+def batch_detail(batch_id: str, page: int = Query(1, ge=1),
+                 delivery_status: Literal["all", "failed", "review", "pending", "sending", "sent"] = "all",
+                 user=Depends(auth.permission("history.read")), db=Depends(get_db)):
     batch = accessible_batch(db, batch_id, user)
     base = select(Delivery, Ledger.employee_id, MessageRecall).join(Ledger, Delivery.ledger_id == Ledger.id).outerjoin(
         MessageRecall, MessageRecall.delivery_id == Delivery.id).where(Ledger.batch_id == batch.id)
     statuses = db.scalars(select(Delivery.status).join(Ledger, Delivery.ledger_id == Ledger.id).where(Ledger.batch_id == batch.id)).all()
+    counts = dict(Counter(statuses))
+    total = len(statuses) if delivery_status == "all" else counts.get(delivery_status, 0)
+    if delivery_status != "all":
+        base = base.where(Delivery.status == delivery_status)
+    page = min(page, max(1, (total + 99) // 100))
     rows = []
     when = now_utc()
     summary = recall_summary(db, batch.id, when)
@@ -164,7 +172,7 @@ def batch_detail(batch_id: str, page: int = Query(1, ge=1), user=Depends(auth.pe
                      "recall_deadline": recall_deadline(delivery).isoformat() + "Z" if recall_deadline(delivery) else None,
                      "can_recall": allow_recall and can_recall(delivery, recall, when)})
     return {"id": batch.id, "snapshot": batch.snapshot, "created_at": batch.created_at.isoformat() + "Z",
-            "deliveries": rows, "statuses": dict(Counter(statuses)), "total": len(statuses), "page": page,
+            "deliveries": rows, "statuses": counts, "total": total, "page": page, "delivery_status": delivery_status,
             "recall_statuses": summary["statuses"], "recall_available": summary["available"],
             "cancelled_scores": summary["cancelled_scores"], "scores": summary["scores"],
             "can_recall": allow_recall, "can_retry": allow_retry}

@@ -16,7 +16,7 @@ const vueUrl = import.meta.resolve('vue')
 const transpile = source => ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText
-for (const name of ['api', 'types', 'roles']) {
+for (const name of ['api', 'types', 'roles', 'historyPresentation']) {
   writeFileSync(resolve(cache, `${name}.mjs`), transpile(readFileSync(resolve(frontend, `src/${name}.ts`), 'utf8')))
 }
 const source = readFileSync(resolve(frontend, 'src/App.vue'), 'utf8')
@@ -24,22 +24,33 @@ const { descriptor } = parse(source)
 let compiled = compileScript(descriptor, { id: 'preview-regression', inlineTemplate: true }).content
 const children = [...source.matchAll(/import (\w+) from '\.\/components\/[^']+\.vue'/g)].map(match => match[1])
 writeFileSync(resolve(cache, 'children.mjs'), `import { defineComponent, h } from ${JSON.stringify(vueUrl)};\n` + children.map(name =>
-  `export const ${name} = defineComponent({ name: '${name}', inheritAttrs: false, setup(_, { attrs }) { return () => h('test-control', { ...attrs, 'data-component': '${name}' }) } });`,
+  `export const ${name} = defineComponent({ name: '${name}', inheritAttrs: false, setup(_, { attrs, expose }) { expose({ focusClose() {} }); return () => h('test-control', { ...attrs, 'data-component': '${name}' }) } });`,
 ).join('\n'))
 compiled = compiled.replace(/from ['"]vue['"]/g, `from ${JSON.stringify(vueUrl)}`)
+// Exercise component lifecycle without CSS transition timers in the custom renderer.
+compiled = compiled.replace(/\bTransition as _Transition\b/g, 'BaseTransition as _Transition')
 compiled = compiled.replace(/import (\w+) from '\.\/components\/[^']+\.vue'/g, 'import { $1 } from "./children.mjs"')
 compiled = compiled.replace(/from ['"]\.\/(api|types|roles)['"]/g, 'from "./$1.mjs"')
 writeFileSync(resolve(cache, 'App.mjs'), transpile(compiled))
 const App = (await import(pathToFileURL(resolve(cache, 'App.mjs')).href)).default
+const dialogSource = readFileSync(resolve(frontend, 'src/components/BatchResultDialog.vue'), 'utf8')
+const dialogDescriptor = parse(dialogSource).descriptor
+let dialogCompiled = compileScript(dialogDescriptor, { id: 'delivery-filter-regression', inlineTemplate: true }).content
+dialogCompiled = dialogCompiled.replace(/from ['"]vue['"]/g, `from ${JSON.stringify(vueUrl)}`)
+dialogCompiled = dialogCompiled.replace(/from ['"]\.\.\/(types|historyPresentation)['"]/g, 'from "./$1.mjs"')
+dialogCompiled = dialogCompiled.replace(/import EmployeeAvatar from '\.\/EmployeeAvatar.vue'/g, 'import { EmployeeAvatar } from "./children.mjs"')
+writeFileSync(resolve(cache, 'BatchResultDialog.mjs'), transpile(dialogCompiled))
+const BatchResultDialog = (await import(pathToFileURL(resolve(cache, 'BatchResultDialog.mjs')).href)).default
 
 class Element extends EventTarget {
-  constructor(tag, text = '') { super(); this.tag = tag; this.text = text; this.props = {}; this.children = []; this.parent = null; this.value = ''; this.style = {}; this.classList = { add() {}, remove() {} }; this.isConnected = true }
+  constructor(tag, text = '') { super(); this.tag = tag; this.text = text; this.props = {}; this.children = []; this.parent = null; this.value = ''; this.style = {}; this.classList = { add() {}, remove() {} }; this.isConnected = true; this.scrollTop = 0 }
   getAttribute(name) { return this.props[name] ?? null }
   setAttribute(name, value) { this.props[name] = value }
   removeAttribute(name) { delete this.props[name] }
   focus() { document.activeElement = this }
   blur() { if (document.activeElement === this) document.activeElement = document.body }
   scrollIntoView() {}
+  getBoundingClientRect() { return { top: 0 } }
 }
 const renderer = createRenderer({
   createElement: tag => new Element(tag),
@@ -76,7 +87,7 @@ async function mount(t) {
   globalThis.HTMLElement = Element
   globalThis.requestAnimationFrame = callback => setTimeout(callback, 0)
   globalThis.cancelAnimationFrame = clearTimeout
-  const previews = [], commits = []
+  const previews = [], commits = [], detailRequests = [], retryRequests = [], dialogs = []
   let currentUser = user, identityReads = 0
   globalThis.fetch = (url, options) => {
     const path = url.split('?')[0]
@@ -92,13 +103,27 @@ async function mount(t) {
       return pending.promise
     }
     if (path === '/api/adjustments') return Promise.resolve(reply({ items: [], total: 0, page: 1 }))
+    if (path.startsWith('/api/adjustments/')) {
+      const query = new URL(url, 'http://localhost').searchParams
+      const filter = query.get('delivery_status') ?? 'all'
+      const page = Number(query.get('page') ?? 1)
+      detailRequests.push({ id: path.split('/').at(-1), filter, page })
+      const statuses = retryRequests.length ? { sent: 519 } : { sent: 314, failed: 205 }
+      return Promise.resolve(reply({
+        id: path.split('/').at(-1), snapshot: { rows: [], recipients: people, message_count: 519, month: '2026-11', delta: 5, reason: '测试批次', operator_name: '张三' },
+        scores: [], created_at: new Date(Date.now()).toISOString(), deliveries: [], statuses,
+        total: filter === 'all' ? 519 : statuses[filter] ?? 0, page, delivery_status: filter,
+        recall_statuses: {}, recall_available: 0, cancelled_scores: 0, can_recall: false, can_retry: true,
+      }))
+    }
+    if (path.startsWith('/api/deliveries/') && path.endsWith('/retry')) { retryRequests.push(path); return Promise.resolve(reply({ ok: true })) }
     if (path === '/api/auth/logout') return Promise.resolve(reply({ ok: true }))
     throw new Error(`Unexpected test request ${url}`)
   }
   const root = new Element('root'), app = renderer.createApp(App)
   app.config.warnHandler = message => { throw new Error(message) }
   app.mount(root)
-  t.after(async () => { app.unmount(); await settle(); for (const [key, value] of old) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value } })
+  t.after(async () => { dialogs.forEach(dialog => dialog.unmount()); app.unmount(); await settle(); for (const [key, value] of old) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value } })
   await settle()
   const find = predicate => { const found = nodes(root).filter(predicate); assert.equal(found.length, 1, 'Expected one rendered control'); return found[0] }
   const component = name => find(node => node.props['data-component'] === name)
@@ -117,7 +142,13 @@ async function mount(t) {
     pending.resolve(reply({ preview_token: `token-${body.reason}`, expires_at: new Date(Date.now() + 600000).toISOString(), month: '2026-11', delta, reason: body.reason, operator_name: '张三', recipients: people, message_count: 1, rows: [{ person: people[0], before_total: 60, final_total: context.total, override_total: body.overrides.p1 ?? null, balance_version: 0, context, card: { data: { template_id: 'test', template_version_name: '1', template_variable: { user_name: '张三', department: '研发', reason: body.reason, score: String(delta), total_score: String(context.total) } } } }], ...overrides }))
     await settle()
   }
-  return { root, find, component, fieldset, reason, input, advance, previews, commits, complete, app,
+  const mountDialog = (detail, props = {}) => {
+    const root = new Element('dialog-root')
+    const dialog = renderer.createApp(BatchResultDialog, { detail, busy: false, error: '', clock: Date.now(), confirmingRecall: false, ...props })
+    dialog.mount(root); dialogs.push(dialog)
+    return root
+  }
+  return { root, find, component, fieldset, reason, input, advance, previews, commits, complete, app, detailRequests, retryRequests, mountDialog,
     setUser: changes => { currentUser = { ...user, ...changes } }, get identityReads() { return identityReads } }
 }
 
@@ -132,12 +163,66 @@ test('automatic preview keeps the form editable through loading and success', as
   const mobilePreview = h.find(node => node.props.class === 'mobile-actions').children.find(node => node.tag === 'button')
   assert.equal(mobilePreview.props.disabled, true)
   assert.equal(mobilePreview.props['aria-busy'], true)
-  assert.equal(text(mobilePreview), '正在更新预览…')
+  assert.equal(text(mobilePreview), '更新预览')
+  assert.equal(text(h.find(node => node.props.class === 'preview-status')), '正在更新预览…')
   await h.complete(h.previews[0])
   assert.equal(h.fieldset().props.disabled, false)
   assert.equal(document.activeElement, h.reason())
   assert.equal(h.reason().value, '提前完成项目')
   assert.equal(h.component('CardPreview').props.context.reason, '提前完成项目')
+})
+
+test('preview controls and expanded recipients stay mounted throughout editing and refreshes', async t => {
+  const h = await mount(t)
+  const reason = h.reason()
+  const card = h.component('CardPreview')
+  const status = h.find(node => node.props.class?.includes('preview-status'))
+  const details = h.find(node => node.props.class === 'preview-details')
+  const recipients = nodes(details).find(node => node.tag === 'details')
+  assert.ok(recipients)
+  recipients.open = true
+  const send = h.find(node => node.props.class?.includes('preview-send'))
+  const mobile = h.find(node => node.props.class === 'mobile-actions').children.filter(node => node.tag === 'button')
+  assert.equal(mobile.length, 2)
+  const assertStable = () => {
+    assert.equal(h.reason(), reason)
+    assert.equal(h.component('CardPreview'), card)
+    assert.equal(h.find(node => node.props.class?.includes('preview-status')), status)
+    assert.equal(h.find(node => node.props.class === 'preview-details'), details)
+    assert.equal(nodes(details).find(node => node.tag === 'details'), recipients)
+    assert.equal(recipients.open, true)
+    assert.equal(h.find(node => node.props.class?.includes('preview-send')), send)
+    const currentMobile = h.find(node => node.props.class === 'mobile-actions').children.filter(node => node.tag === 'button')
+    assert.equal(currentMobile.length, 2)
+    assert.equal(currentMobile[0], mobile[0])
+    assert.equal(currentMobile[1], mobile[1])
+    assert.equal(h.fieldset().props.disabled, false)
+    assert.equal(h.find(node => node.props.class?.includes('form-submit')).props.class.includes('busy'), false)
+  }
+
+  assert.equal(send.props.disabled, true)
+  await h.input('第一次填写'); assertStable()
+  await h.advance(600); assertStable()
+  await h.complete(h.previews[0]); assertStable()
+  assert.equal(send.props.disabled, false)
+
+  await h.input('第一次填写后继续'); assertStable()
+  assert.equal(send.props.disabled, true)
+  await h.advance(600); const cancelled = h.previews[1]; assertStable()
+  await h.input('最后一次填写'); assertStable()
+  assert.equal(cancelled.signal.aborted, true)
+  await h.advance(600); assertStable()
+  await h.complete(cancelled); assertStable()
+  assert.equal(send.props.disabled, true)
+  h.previews[2].resolve(reply({ detail: '暂时生成失败' }, 503)); await settle(); assertStable()
+  assert.equal(send.props.disabled, true)
+  assert.equal(text(h.root).includes('暂时生成失败'), true)
+
+  h.find(node => node.tag === 'form').props.onSubmit(new Event('submit', { cancelable: true }))
+  await settle(); assertStable()
+  await h.complete(h.previews[3]); assertStable()
+  assert.equal(send.props.disabled, false)
+  assert.equal(h.component('CardPreview').props.context.reason, '最后一次填写')
 })
 
 test('editing cancels an old request and ignores its late success and loading cleanup', async t => {
@@ -187,7 +272,7 @@ test('clearing a required field cancels the request without scheduling another',
   await h.complete(h.previews[0]); await h.advance(2000)
   assert.equal(h.previews.length, 1)
   assert.equal(h.reason().value, '')
-  assert.equal(nodes(h.root).some(node => node.props.class?.includes('preview-send')), false)
+  assert.equal(h.find(node => node.props.class?.includes('preview-send')).props.disabled, true)
 })
 
 test('preview timeout is local, keeps the draft and does not retry automatically', async t => {
@@ -195,7 +280,7 @@ test('preview timeout is local, keeps the draft and does not retry automatically
   h.reason().focus(); await h.input('超时也保留这段原因'); await h.advance(600)
   h.previews[0].resolve(reply({ detail: '请求超时，操作结果待确认，请刷新查看。' }, 408)); await settle()
   const alert = h.find(node => node.props.role === 'alert' && text(node) === '预览生成超时，请重试。')
-  assert.equal(alert.parent.props.class, 'panel preview-panel')
+  assert.ok(nodes(h.find(node => node.props.class === 'panel preview-panel')).includes(alert))
   assert.equal(h.reason().value, '超时也保留这段原因')
   assert.equal(document.activeElement, h.reason())
   assert.equal(h.fieldset().props.disabled, false)
@@ -283,4 +368,62 @@ test('confirmed submission locks the form, deduplicates clicks and reuses its ke
   assert.equal(h.commits[1].body.idempotency_key, key)
   assert.equal(h.commits[1].body.preview_token, 'token-确认同一笔')
   h.commits[1].resolve(reply({ detail: '结束测试' }, 503)); await settle()
+})
+
+test('failed-result shortcut, pagination, refresh and retry preserve the server status filter', async t => {
+  const h = await mount(t)
+  await h.find(node => node.tag === 'button' && text(node) === '发送记录').props.onClick(); await settle()
+  await h.component('SendingHistory').props.onFailed('batch-1'); await settle()
+  assert.deepEqual(h.detailRequests.at(-1), { id: 'batch-1', filter: 'failed', page: 1 })
+  assert.equal(h.component('BatchResultDialog').props.detail.delivery_status, 'failed')
+
+  await h.component('BatchResultDialog').props.onChangePage(2); await settle()
+  assert.deepEqual(h.detailRequests.at(-1), { id: 'batch-1', filter: 'failed', page: 2 })
+  await h.component('BatchResultDialog').props.onRefresh(); await settle()
+  assert.deepEqual(h.detailRequests.at(-1), { id: 'batch-1', filter: 'failed', page: 2 })
+  await h.component('BatchResultDialog').props.onRetry('delivery-failed'); await settle()
+  assert.deepEqual(h.retryRequests, ['/api/deliveries/delivery-failed/retry'])
+  assert.deepEqual(h.detailRequests.at(-1), { id: 'batch-1', filter: 'failed', page: 2 })
+  assert.equal(h.component('BatchResultDialog').props.detail.total, 0)
+  assert.equal(h.component('BatchResultDialog').props.detail.delivery_status, 'failed')
+
+  await h.component('BatchResultDialog').props.onChangeStatus('all'); await settle()
+  assert.deepEqual(h.detailRequests.at(-1), { id: 'batch-1', filter: 'all', page: 1 })
+  assert.equal(h.component('BatchResultDialog').props.detail.total, 519)
+  h.component('BatchResultDialog').props.onClose(); await settle()
+  await h.component('SendingHistory').props.onDetail('batch-2'); await settle()
+  assert.deepEqual(h.detailRequests.at(-1), { id: 'batch-2', filter: 'all', page: 1 })
+})
+
+test('result dialog shows global status counts, filtered pagination and retry actions', async t => {
+  const h = await mount(t)
+  const detail = {
+    id: 'batch-1', snapshot: { month: '2026-11', delta: 5, reason: '批量通知', operator_name: '张三', message_count: 519, recipients: people, rows: [{ person: people[0], final_total: 65, override_total: null }] },
+    scores: [], created_at: new Date(Date.now()).toISOString(), statuses: { sent: 414, failed: 105 },
+    delivery_status: 'failed', page: 2, total: 105, can_retry: true, can_recall: false, recall_available: 0, recall_statuses: {}, cancelled_scores: 0,
+    deliveries: [{ id: 'delivery-failed', person_id: 'p1', recipient_name: '测试接收人', status: 'failed', attempts: 1, last_error: '发送失败原因', message_id: null, sent_at: null, recall_status: null, recall_error: null, recalled_at: null, recall_deadline: null, can_recall: false }],
+  }
+  const changed = [], retried = [], pages = []
+  const root = h.mountDialog(detail, { onChangeStatus: value => changed.push(value), onRetry: value => retried.push(value), onChangePage: value => pages.push(value) })
+  await settle()
+  const filters = nodes(root).find(node => node.props['aria-label'] === '按发送状态筛选通知')
+  const buttons = filters.children.filter(node => node.tag === 'button')
+  assert.equal(buttons.length, 6)
+  assert.equal(text(buttons[0]), '全部 519')
+  assert.equal(text(buttons[1]), '发送失败 105')
+  assert.equal(buttons[1].props['aria-pressed'], true)
+  assert.ok(buttons.some(node => text(node) === '已发送 414'))
+  buttons[0].props.onClick(); assert.deepEqual(changed, ['all'])
+  assert.equal(text(root).includes('筛选结果 105 条'), true)
+  assert.equal(text(root).includes('显示 101–105 / 105 条'), true)
+  const retry = nodes(root).find(node => node.props['aria-label'] === '重试发送张三给测试接收人')
+  assert.ok(retry)
+  retry.props.onClick(); assert.deepEqual(retried, ['delivery-failed'])
+  nodes(root).find(node => node.tag === 'button' && text(node) === '上一页').props.onClick()
+  assert.deepEqual(pages, [1])
+
+  const empty = h.mountDialog({ ...detail, page: 1, total: 0, deliveries: [], statuses: { sent: 519 } })
+  await settle()
+  assert.equal(text(empty).includes('暂无符合该状态的通知'), true)
+  assert.equal(text(empty).includes('筛选结果 0 条'), true)
 })

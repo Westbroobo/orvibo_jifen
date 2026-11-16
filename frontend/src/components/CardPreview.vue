@@ -40,7 +40,7 @@ onUnmounted(() => emit('editing-total', false))
       </div>
     </div>
   </article>
-  <div class="card-preview-meta"><span>操作人：{{ context.operator_name }}<span v-if="context.time"> · {{ context.time }}</span></span><div v-if="editableTotal" class="total-mode"><span>{{ totalInput === undefined ? '自动总分' : '手动总分' }}</span><button v-if="totalInput !== undefined" type="button" :disabled="totalDisabled" @click="emit('reset-total')">恢复自动</button></div></div>
+  <div class="card-preview-meta"><span>操作人：{{ context.operator_name }}<span class="card-preview-time"> · {{ context.time || '待生成' }}</span></span><div v-if="editableTotal" class="total-mode"><span>{{ totalInput === undefined ? '自动总分' : '手动总分' }}</span><button v-if="totalInput !== undefined" type="button" :disabled="totalDisabled" @click="emit('reset-total')">恢复自动</button></div></div>
 </template>
 
 <style scoped>
@@ -63,6 +63,7 @@ onUnmounted(() => emit('editing-total', false))
 .points-card input.total-input::-webkit-inner-spin-button,.points-card input.total-input::-webkit-outer-spin-button{appearance:none;margin:0}
 .total-input-wrap>b{font-size:17px}
 .card-preview-meta{display:flex;justify-content:space-between;align-items:center;gap:6px 12px;flex-wrap:wrap;font-size:var(--fs-xs);color:var(--muted);margin:14px 0 0;line-height:1.8}
+.card-preview-time{display:inline-block;width:20ch;white-space:nowrap;font-family:var(--mono)}
 .total-mode{display:flex;align-items:center;gap:8px;margin-left:auto}
 .total-mode button{border:0;background:transparent;padding:0;color:var(--accent-deep);font-family:var(--sans);font-size:var(--fs-xs)}
 @media(max-width:420px){.points-card{padding:14px 14px 22px}.points-card-top>strong{font-size:14px}.points-card-department{font-size:14px}.points-card-person,.points-card-reason{font-size:var(--fs-md)}}

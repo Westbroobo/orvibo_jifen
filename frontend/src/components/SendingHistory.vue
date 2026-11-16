@@ -5,12 +5,12 @@ import { notificationNotes, notificationState, recordTime } from '../historyPres
 import EmployeeAvatar from './EmployeeAvatar.vue'
 
 const props = defineProps<{ items: HistoryItem[]; total: number; page: number; loading: boolean; busy: boolean }>()
-const emit = defineEmits<{ refresh: []; 'change-page': [page: number]; detail: [id: string]; recall: [item: HistoryItem] }>()
+const emit = defineEmits<{ refresh: []; 'change-page': [page: number]; detail: [id: string]; failed: [id: string]; recall: [item: HistoryItem] }>()
 const pageSize = 20
 const pages = computed(() => Math.max(1, Math.ceil(props.total / pageSize)))
 const rows = computed(() => props.items.map(item => ({
   item, state: notificationState(item.message_count, item.statuses, item.recall_statuses),
-  notes: notificationNotes(item.statuses, item.recall_statuses), time: recordTime(item.created_at),
+  notes: notificationNotes({ ...item.statuses, failed: 0 }, item.recall_statuses), time: recordTime(item.created_at),
   people: item.people?.length ? item.people : item.names.map((name, index) => ({ id: String(index), name, avatar_url: '' })),
 })))
 const panel = ref<HTMLElement | null>(null)
@@ -63,7 +63,7 @@ onUnmounted(() => { observer?.disconnect(); window.removeEventListener('resize',
               <p :title="row.item.reason">{{ row.item.reason }}</p>
             </div>
             <div role="cell" class="history-score"><b class="signed-number" :class="row.item.delta > 0 ? 'plus-text' : 'minus-text'">{{ row.item.delta > 0 ? '+' : '' }}{{ row.item.delta }}<small> 分</small></b><small v-if="row.item.cancelled_scores" class="history-cancelled">{{ row.item.cancelled_scores === row.item.names.length ? '记分已作废' : `${row.item.cancelled_scores} / ${row.item.names.length} 人已作废` }}</small></div>
-            <div role="cell" class="history-status"><span class="result-badge" :class="[`tone-${row.state.tone}`, { pulse: row.state.pulse }]">{{ row.state.text }}</span><small>{{ row.item.statuses.sent ?? 0 }} / {{ row.item.message_count }} 条已发送</small><small v-if="row.item.recall_statuses?.recalled">{{ row.item.recall_statuses.recalled }} / {{ row.item.message_count }} 条已撤回</small><small v-for="note in row.notes" :key="note.text" :class="`result-text-${note.tone}`">{{ note.text }}</small></div>
+            <div role="cell" class="history-status"><span class="result-badge" :class="[`tone-${row.state.tone}`, { pulse: row.state.pulse }]">{{ row.state.text }}</span><small>{{ row.item.statuses.sent ?? 0 }} / {{ row.item.message_count }} 条已发送</small><small v-if="row.item.recall_statuses?.recalled">{{ row.item.recall_statuses.recalled }} / {{ row.item.message_count }} 条已撤回</small><button v-if="row.item.statuses.failed" type="button" class="history-failed" :disabled="busy || loading" :aria-label="`查看本批 ${row.item.statuses.failed} 条发送失败的通知`" @click="emit('failed', row.item.id)">发送失败 {{ row.item.statuses.failed }}<span aria-hidden="true"> ›</span></button><small v-for="note in row.notes" :key="note.text" :class="`result-text-${note.tone}`">{{ note.text }}</small></div>
             <div role="cell" class="history-time"><time :datetime="row.item.created_at">{{ row.time.date }}<span>{{ row.time.time }}</span></time><div class="history-operator"><EmployeeAvatar :src="row.item.operator_avatar_url" :name="row.item.operator_name" size="tiny" /><span :title="row.item.operator_name">{{ row.item.operator_name }}</span></div></div>
             <div role="cell" class="history-actions"><button type="button" class="history-view" :disabled="busy || loading" :aria-label="`查看第 ${(page - 1) * pageSize + index + 1} 次发送结果`" @click="emit('detail', row.item.id)">查看结果</button><button v-if="row.item.can_recall && row.item.recall_available" type="button" class="recall-button" :disabled="busy || loading" :aria-label="`整批撤回第 ${(page - 1) * pageSize + index + 1} 次发送`" @click="emit('recall', row.item)">整批撤回</button></div>
           </div>
@@ -90,6 +90,7 @@ onUnmounted(() => { observer?.disconnect(); window.removeEventListener('resize',
 .history-score{display:flex;flex-direction:column;gap:5px;min-width:0}.history-score>b{font-size:16px;font-weight:700;white-space:normal;overflow-wrap:anywhere}.history-score>b small{font-family:var(--sans);font-weight:400;font-size:var(--fs-xs);white-space:nowrap}.history-cancelled{color:var(--muted);line-height:1.6}
 .history-status{display:flex;align-items:flex-start;flex-direction:column;gap:5px;min-width:0;color:var(--muted)}.history-status>small{font-size:var(--fs-xs);line-height:1.5}
 .history-time{min-width:0;font-size:var(--fs-xs);color:var(--muted)}.history-time time{font-family:var(--mono);display:block;line-height:1.6}.history-time time span{display:block}.history-operator{display:flex;align-items:center;gap:6px;color:var(--text);margin-top:6px;min-width:0}.history-operator>span:last-child{overflow-wrap:anywhere;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.history-status .history-failed{padding:2px 0;border:0;border-radius:0;background:transparent;color:var(--minus-ink);font-family:var(--sans);font-size:var(--fs-xs);line-height:1.5;text-align:left;text-decoration:underline;text-underline-offset:3px}.history-status .history-failed:hover:not(:disabled){background:transparent;color:var(--accent-pressed)}
 .history-actions{display:flex;flex-direction:column;align-items:stretch;gap:8px}.history-actions button{padding:7px 9px;font-size:var(--fs-xs);white-space:nowrap}.history-view{color:var(--text);background:var(--surface-2)}
 .history-empty{display:flex;flex-direction:column;align-items:center;gap:12px;padding:64px 16px;font-size:var(--fs-sm);color:var(--muted)}.history-empty svg{width:38px;height:38px;stroke:var(--control-line);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .history-footer{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 22px;font-size:var(--fs-xs);color:var(--muted);border-top:1px solid var(--line)}.history-footer .pagination{margin:0}
