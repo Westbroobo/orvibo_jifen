@@ -611,3 +611,83 @@ END$$
 DELIMITER ;
 CALL orvibo_jifen_upgrade_permissions();
 DROP PROCEDURE orvibo_jifen_upgrade_permissions;
+
+
+-- =====================================================================
+-- 增量 2026-11-17（第九段）：独立名单同步任务
+-- 先执行本段创建三张新表，再发布新版 API、前端和 table-sync 服务。
+-- 可重复执行；不修改既有业务表，不增加外键，不改变当前角色权限。
+-- 新任务默认关闭定时，确认应用有目标表权限后先预览、手动核验再开启。
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS orvibo_jifen_table_sync_tasks (
+	id VARCHAR(36) NOT NULL COMMENT '同步任务 ID',
+	name VARCHAR(200) NOT NULL COMMENT '任务名称',
+	source_kind VARCHAR(20) NOT NULL COMMENT '来源：preset 公共名单，selection 任务专属规则',
+	preset_id VARCHAR(36) COMMENT '引用的公共名单 ID，删除名单后执行停止',
+	selection JSON NOT NULL COMMENT '任务专属名单规则，不写入发送名单',
+	target_url TEXT NOT NULL COMMENT '管理员填写的目标多维表链接',
+	base_token VARCHAR(100) NOT NULL COMMENT '解析后的多维表应用标识',
+	table_id VARCHAR(100) NOT NULL COMMENT '指定数据表 ID，不使用视图筛选范围',
+	table_name VARCHAR(200) NOT NULL COMMENT '数据表名称快照',
+	target_key VARCHAR(220) COLLATE utf8mb4_bin COMMENT '活动目标唯一键；任务删除后置空以释放目标',
+	field_mapping JSON NOT NULL COMMENT '部门、姓名及 user_id 对应的目标字段 ID',
+	cron VARCHAR(100) NOT NULL COMMENT '北京时间标准五字段 Cron',
+	enabled BOOL NOT NULL DEFAULT 0 COMMENT '只控制定时触发，不影响手动执行',
+	deleted BOOL NOT NULL DEFAULT 0 COMMENT '软删除标记，保留历史执行记录',
+	next_run_at DATETIME COMMENT '下次定时触发时间（UTC）',
+	active_run_id VARCHAR(36) COMMENT '正在排队或执行的记录 ID',
+	config_version INTEGER NOT NULL DEFAULT 1 COMMENT '任务配置版本，用于防止覆盖在途编辑',
+	last_status VARCHAR(20) COMMENT '最近一次执行状态',
+	last_summary JSON COMMENT '最近一次执行统计摘要',
+	last_run_at DATETIME COMMENT '最近一次执行完成时间（UTC）',
+	created_by VARCHAR(36) NOT NULL COMMENT '任务创建人的系统员工 ID',
+	updated_by VARCHAR(36) NOT NULL COMMENT '最后修改人的系统员工 ID',
+	created_at DATETIME NOT NULL COMMENT '创建时间（UTC）',
+	updated_at DATETIME NOT NULL COMMENT '更新时间（UTC）',
+	PRIMARY KEY (id),
+	UNIQUE (target_key),
+	INDEX `ix_table_sync_tasks_due` (`deleted`, `enabled`, `next_run_at`)
+)COMMENT='独立的名单到多维表同步任务，不参与积分或通讯录任务锁' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS orvibo_jifen_table_sync_runs (
+	id VARCHAR(36) NOT NULL COMMENT '执行 ID',
+	task_id VARCHAR(36) NOT NULL COMMENT '所属任务 ID，应用层关联',
+	task_name VARCHAR(200) NOT NULL COMMENT '本次执行的任务名称快照',
+	kind VARCHAR(20) NOT NULL COMMENT '执行种类：preview 只读预览，sync 实际同步',
+	`trigger` VARCHAR(20) NOT NULL COMMENT '触发方式：manual 或 scheduled',
+	status VARCHAR(20) NOT NULL COMMENT '排队、运行、成功、无变化、失败或中断',
+	config JSON NOT NULL COMMENT '本次任务配置快照',
+	source_snapshot JSON COMMENT '完整来源快照及版本，供删除前复核',
+	summary JSON COMMENT '来源、目标、新增、更新、删除、重复及不变数量',
+	details JSON COMMENT '完整差异计划，详情分页按需读取',
+	actor_id VARCHAR(36) COMMENT '手动触发人员 ID；定时执行为空',
+	actor_name VARCHAR(200) COMMENT '触发人姓名快照',
+	scheduled_at DATETIME COMMENT '本次计划触发时间（UTC）',
+	created_at DATETIME NOT NULL COMMENT '入队时间（UTC）',
+	started_at DATETIME COMMENT '开始执行时间（UTC）',
+	finished_at DATETIME COMMENT '完成时间（UTC）',
+	error TEXT COMMENT '安全的错误摘要，不存凭据和上游原始响应',
+	lease_token VARCHAR(36) COMMENT '本次执行归属令牌',
+	lease_until DATETIME COMMENT '归属心跳期限（UTC），不单凭到期重放写入',
+	worker_id VARCHAR(36) COMMENT '领取执行的独立 worker 标识',
+	progress_at DATETIME COMMENT '最近执行心跳（UTC）',
+	PRIMARY KEY (id),
+	INDEX `ix_table_sync_runs_created` (`created_at`, `id`),
+	INDEX `ix_table_sync_runs_finished` (`finished_at`, `id`),
+	INDEX `ix_table_sync_runs_status_created` (`status`, `created_at`, `id`),
+	INDEX `ix_table_sync_runs_task_created` (`task_id`, `created_at`, `id`)
+)COMMENT='名单同步及只读预览执行历史，独立于积分发送记录' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS orvibo_jifen_table_sync_logs (
+	id INTEGER NOT NULL COMMENT '日志流水号' AUTO_INCREMENT,
+	run_id VARCHAR(36) NOT NULL COMMENT '所属执行 ID',
+	created_at DATETIME NOT NULL COMMENT '日志时间（UTC）',
+	level VARCHAR(10) NOT NULL COMMENT '日志级别',
+	stage VARCHAR(40) NOT NULL COMMENT '执行阶段',
+	message VARCHAR(2000) NOT NULL COMMENT '可读日志信息',
+	details JSON COMMENT '结构化进度或错误代码，不存敏感凭据',
+	PRIMARY KEY (id),
+	INDEX `ix_table_sync_logs_created` (`created_at`, `id`),
+	INDEX `ix_table_sync_logs_run_id` (`run_id`, `id`)
+)COMMENT='每次名单同步的执行阶段及安全错误日志' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

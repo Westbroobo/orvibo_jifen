@@ -18,6 +18,7 @@ from .permissions import history_visible, can_operate_batch, function_permission
 from .recall import batch_summaries, can_recall, recall_deadline, recall_summary, request_recall
 from .schemas import AdjustmentRequest, CommitRequest, RoleRequest, Selection, SyncScheduleRequest
 from .sync_schedule import first_sync_at, schedule_view
+from .table_sync.api import router as table_sync_router
 
 settings = get_settings()
 
@@ -33,6 +34,7 @@ app.include_router(auth.router)
 app.include_router(presets_router)
 app.include_router(score_ledgers_router)
 app.include_router(authorization_router)
+app.include_router(table_sync_router)
 
 
 @app.middleware("http")

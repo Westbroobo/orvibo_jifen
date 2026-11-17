@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, ApiError, setCsrf } from './api'
 import { unionSelection } from './types'
 import { displayRoleName } from './roles'
@@ -17,12 +17,13 @@ import RecipientPresetSelect from './components/RecipientPresetSelect.vue'
 import AccessDenied from './components/AccessDenied.vue'
 import OperationManual from './components/OperationManual.vue'
 
+const TableSyncPanel = defineAsyncComponent(() => import('./components/TableSyncPanel.vue'))
 const logoUrl = '/logo.svg'
 const user = ref<User | null>(null)
 const ready = ref(false)
 const redirectingToFeishu = ref(false)
 const demoAvailable = ref(false)
-const page = ref<'console' | 'lists' | 'history' | 'ledger' | 'admin' | 'guide' | 'no-access'>('console')
+const page = ref<'console' | 'lists' | 'history' | 'ledger' | 'admin' | 'table-sync' | 'guide' | 'no-access'>('console')
 const directory = ref<Directory>({ people: [], departments: [], last_sync_at: null, last_sync_error: null, sync_requested: false })
 const totals = ref<Record<string, number>>({})
 const month = ref('')
@@ -113,7 +114,7 @@ function defaultPage(): typeof page.value {
   return user.value?.can_manage ? 'admin' : 'no-access'
 }
 function allowedPage(value: typeof page.value) {
-  return authorized.value && (value === 'lists' || value === 'guide' || value === 'admin' && user.value?.can_manage ||
+  return authorized.value && (value === 'lists' || value === 'guide' || (value === 'admin' || value === 'table-sync') && user.value?.can_manage ||
     value === 'console' && can('adjustments.write') || value === 'history' && can('history.read') || value === 'ledger' && can('ledgers.read'))
 }
 async function refreshIdentity(signal?: AbortSignal) {
@@ -437,7 +438,7 @@ async function switchPage(value: typeof page.value) {
     if (request.signal.aborted) return
     page.value = allowedPage(value) ? value : defaultPage()
     if (page.value === 'history') await loadHistory(request.signal)
-    else if (page.value !== 'ledger' && page.value !== 'guide') await refresh(request.signal)
+    else if (page.value !== 'ledger' && page.value !== 'guide' && page.value !== 'table-sync') await refresh(request.signal)
   } catch (e) {
     if (!request.signal.aborted) { error.value = e instanceof Error ? e.message : '加载失败'; request.abort() }
   } finally {
@@ -494,6 +495,7 @@ async function confirmRecall() {
         <button v-if="can('history.read')" type="button" :class="{ active: page === 'history' }" :aria-current="page === 'history' ? 'page' : undefined" :disabled="busy" @click="switchPage('history')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h11l3 3v13H5zM9 10h6M9 14h6M9 17h4" /></svg><span>发送记录</span></button>
         <button v-if="can('ledgers.read')" type="button" :class="{ active: page === 'ledger' }" :aria-current="page === 'ledger' ? 'page' : undefined" :disabled="busy" @click="switchPage('ledger')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 3h14v18H5zM9 7h6M9 12h6M9 17h6M12 9v6" /></svg><span>积分明细</span></button>
         <button v-if="user.can_manage" type="button" :class="{ active: page === 'admin' }" :aria-current="page === 'admin' ? 'page' : undefined" :disabled="busy" @click="switchPage('admin')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6zM9 12l2 2 4-4" /></svg><span>权限管理</span></button>
+        <button v-if="user.can_manage" type="button" :class="{ active: page === 'table-sync' }" :aria-current="page === 'table-sync' ? 'page' : undefined" :disabled="busy" @click="switchPage('table-sync')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4h13v5M20 20H7v-5M14 6l3 3 3-3M10 18l-3-3-3 3M4 11v5M20 13V8" /></svg><span>名单同步</span></button>
         <button type="button" :class="{ active: page === 'guide' }" :aria-current="page === 'guide' ? 'page' : undefined" :disabled="busy" @click="switchPage('guide')"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5C9 3 6 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15M6 8h3M6 12h3M15 8h3M15 12h3" /></svg><span>操作手册</span></button>
       </nav>
       <div class="workspace-content">
@@ -558,6 +560,7 @@ async function confirmRecall() {
       <SendingHistory v-else-if="page === 'history'" :items="history" :total="historyTotal" :page="historyPage" :loading="loadingHistory" :busy="busy" @refresh="switchPage('history')" @change-page="changeHistoryPage" @detail="action(() => loadDetail($event))" @failed="action(() => loadDetail($event, 1, false, 'failed'))" @recall="askBatchRecall" />
       <ScoreLedger v-else-if="page === 'ledger' && can('ledgers.read')" :key="`${user.role}:${user.ledger_scope}:${user.ledger_department_ids.join(',')}:${user.permissions.join(',')}`" :current-month="month" :can-export="can('ledgers.export')" />
       <PermissionsPanel v-else-if="page === 'admin' && user.can_manage" :directory="directory" :user="user" :busy="busy || loadingPage" @synced="switchPage('admin')" @changed="permissionsChanged" />
+      <TableSyncPanel v-else-if="page === 'table-sync' && user.can_manage" />
       <OperationManual v-else-if="page === 'guide'" />
       </div>
       </div>

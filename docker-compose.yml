@@ -47,6 +47,28 @@ services:
     depends_on:
       api:
         condition: service_healthy
+  table-sync:
+    <<: *service-defaults
+    image: orvibo-jifen-backend:local
+    pull_policy: never
+    env_file: .env
+    environment:
+      APP_ENV: production
+      COOKIE_SECURE: "true"
+      DEMO_MODE: "false"
+    command: ["python", "-m", "app.table_sync.worker"]
+    mem_limit: 256m
+    cpus: 0.5
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.table_sync.health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      api:
+        condition: service_healthy
   frontend:
     <<: *service-defaults
     image: orvibo-jifen-frontend:local

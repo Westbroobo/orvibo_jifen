@@ -84,6 +84,80 @@ class Preset(Base):
                       Index("ix_presets_scope_name", "scope", "name"), {"comment": "公共及个人发送名单，使用时按最新人员目录解析"})
 
 
+class TableSyncTask(Base):
+    __tablename__ = "orvibo_jifen_table_sync_tasks"
+    __table_args__ = (Index("ix_table_sync_tasks_due", "deleted", "enabled", "next_run_at"),
+                      {"comment": "独立的名单到多维表同步任务，不参与积分或通讯录任务锁"})
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="同步任务 ID")
+    name: Mapped[str] = mapped_column(String(200), comment="任务名称")
+    source_kind: Mapped[str] = mapped_column(String(20), comment="来源：preset 公共名单，selection 任务专属规则")
+    preset_id: Mapped[str | None] = mapped_column(String(36), comment="引用的公共名单 ID，删除名单后执行停止")
+    selection: Mapped[dict] = mapped_column(JSON, default=dict, comment="任务专属名单规则，不写入发送名单")
+    target_url: Mapped[str] = mapped_column(Text, comment="管理员填写的目标多维表链接")
+    base_token: Mapped[str] = mapped_column(String(100), comment="解析后的多维表应用标识")
+    table_id: Mapped[str] = mapped_column(String(100), comment="指定数据表 ID，不使用视图筛选范围")
+    table_name: Mapped[str] = mapped_column(String(200), default="", comment="数据表名称快照")
+    target_key: Mapped[str | None] = mapped_column(String(220, collation="utf8mb4_bin"), unique=True, comment="活动目标唯一键；任务删除后置空以释放目标")
+    field_mapping: Mapped[dict] = mapped_column(JSON, comment="部门、姓名及 user_id 对应的目标字段 ID")
+    cron: Mapped[str] = mapped_column(String(100), default="0 4 * * *", comment="北京时间标准五字段 Cron")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", comment="只控制定时触发，不影响手动执行")
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", comment="软删除标记，保留历史执行记录")
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, comment="下次定时触发时间（UTC）")
+    active_run_id: Mapped[str | None] = mapped_column(String(36), comment="正在排队或执行的记录 ID")
+    config_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", comment="任务配置版本，用于防止覆盖在途编辑")
+    last_status: Mapped[str | None] = mapped_column(String(20), comment="最近一次执行状态")
+    last_summary: Mapped[dict | None] = mapped_column(JSON, comment="最近一次执行统计摘要")
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, comment="最近一次执行完成时间（UTC）")
+    created_by: Mapped[str] = mapped_column(String(36), comment="任务创建人的系统员工 ID")
+    updated_by: Mapped[str] = mapped_column(String(36), comment="最后修改人的系统员工 ID")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="创建时间（UTC）")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="更新时间（UTC）")
+
+
+class TableSyncRun(Base):
+    __tablename__ = "orvibo_jifen_table_sync_runs"
+    __table_args__ = (Index("ix_table_sync_runs_task_created", "task_id", "created_at", "id"),
+                      Index("ix_table_sync_runs_created", "created_at", "id"),
+                      Index("ix_table_sync_runs_finished", "finished_at", "id"),
+                      Index("ix_table_sync_runs_status_created", "status", "created_at", "id"),
+                      {"comment": "名单同步及只读预览执行历史，独立于积分发送记录"})
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id, comment="执行 ID")
+    task_id: Mapped[str] = mapped_column(String(36), comment="所属任务 ID，应用层关联")
+    task_name: Mapped[str] = mapped_column(String(200), comment="本次执行的任务名称快照")
+    kind: Mapped[str] = mapped_column(String(20), comment="执行种类：preview 只读预览，sync 实际同步")
+    trigger: Mapped[str] = mapped_column(String(20), comment="触发方式：manual 或 scheduled")
+    status: Mapped[str] = mapped_column(String(20), default="queued", comment="排队、运行、成功、无变化、失败或中断")
+    config: Mapped[dict] = mapped_column(JSON, comment="本次任务配置快照")
+    source_snapshot: Mapped[dict | None] = mapped_column(JSON, comment="完整来源快照及版本，供删除前复核")
+    summary: Mapped[dict | None] = mapped_column(JSON, comment="来源、目标、新增、更新、删除、重复及不变数量")
+    details: Mapped[dict | None] = mapped_column(JSON, comment="完整差异计划，详情分页按需读取")
+    actor_id: Mapped[str | None] = mapped_column(String(36), comment="手动触发人员 ID；定时执行为空")
+    actor_name: Mapped[str | None] = mapped_column(String(200), comment="触发人姓名快照")
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, comment="本次计划触发时间（UTC）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="入队时间（UTC）")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, comment="开始执行时间（UTC）")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, comment="完成时间（UTC）")
+    error: Mapped[str | None] = mapped_column(Text, comment="安全的错误摘要，不存凭据和上游原始响应")
+    lease_token: Mapped[str | None] = mapped_column(String(36), comment="本次执行归属令牌")
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, comment="归属心跳期限（UTC），不单凭到期重放写入")
+    worker_id: Mapped[str | None] = mapped_column(String(36), comment="领取执行的独立 worker 标识")
+    progress_at: Mapped[datetime | None] = mapped_column(DateTime, comment="最近执行心跳（UTC）")
+
+
+class TableSyncLog(Base):
+    __tablename__ = "orvibo_jifen_table_sync_logs"
+    __table_args__ = (Index("ix_table_sync_logs_run_id", "run_id", "id"),
+                      Index("ix_table_sync_logs_created", "created_at", "id"),
+                      {"comment": "每次名单同步的执行阶段及安全错误日志"})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True, comment="日志流水号")
+    run_id: Mapped[str] = mapped_column(String(36), comment="所属执行 ID")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc, comment="日志时间（UTC）")
+    level: Mapped[str] = mapped_column(String(10), default="info", comment="日志级别")
+    stage: Mapped[str] = mapped_column(String(40), comment="执行阶段")
+    message: Mapped[str] = mapped_column(String(2000), comment="可读日志信息")
+    details: Mapped[dict | None] = mapped_column(JSON, comment="结构化进度或错误代码，不存敏感凭据")
+
+
 class Balance(Base):
     __tablename__ = "orvibo_jifen_balances"
     __table_args__ = (Index("ix_balances_month", "month"), {"comment": "员工月度积分余额，每人每月唯一"})
