@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { unionSelection } from '../types'
 import type { Directory, Preset } from '../types'
@@ -7,6 +7,7 @@ import { isSyncRunning, mappingComplete, syncActionLabels, syncReasonLabel, sync
 import type { TableSyncField, TableSyncInspection, TableSyncLog, TableSyncPage, TableSyncPayload, TableSyncRow, TableSyncRun, TableSyncTask } from '../tableSync'
 import RecipientRangeEditor from './RecipientRangeEditor.vue'
 import RecipientPresetSelect from './RecipientPresetSelect.vue'
+import RecipientListPreview from './RecipientListPreview.vue'
 
 const prefix = '/table-sync'
 const tasks = ref<TableSyncTask[]>([]), taskTotal = ref(0), taskPage = ref(1)
@@ -28,6 +29,7 @@ const fields = ref<TableSyncField[]>([]), targetTables = ref<{ id: string; name:
 const nextRuns = ref<string[]>([])
 const error = ref(''), feedback = ref(''), pendingAction = ref(''), confirmDelete = ref(false)
 const pendingTaskId = ref(''), rowError = ref<{ taskId: string; message: string } | null>(null)
+const previewSource = ref<Preset | null>(null), previewSourceLabel = ref(''), previewSourceTaskId = ref('')
 const runs = ref<TableSyncRun[]>([]), runTotal = ref(0), runPage = ref(1)
 const runTask = ref<Pick<TableSyncTask, 'id' | 'name'> | null>(null)
 const statusFilter = ref('all'), kindFilter = ref('all')
@@ -137,6 +139,23 @@ function showTaskList() {
 function sourceLabel(task: TableSyncTask) {
   return task.source_kind === 'preset' ? sources.value.find(preset => preset.id === task.preset_id)?.name || '公共名单' : '任务专属名单'
 }
+function showSourceRange(task: TableSyncTask) {
+  if (working.value || sourcesLoading.value) return
+  const preset = task.source_kind === 'preset' ? sources.value.find(item => item.id === task.preset_id) : null
+  if (task.source_kind === 'preset' && !preset) { error.value = '引用的公共名单已不存在或未能加载，请刷新后重试。'; return }
+  previewSourceTaskId.value = task.id
+  previewSourceLabel.value = preset ? `公共名单 · ${preset.name}` : '任务专属名单'
+  previewSource.value = { id: task.id, name: task.name, scope: preset ? 'public' : 'personal', can_edit: false,
+    selection: JSON.parse(JSON.stringify(preset?.selection ?? task.selection)) }
+}
+async function closeSourceRange() {
+  const taskId = previewSourceTaskId.value
+  previewSource.value = null; previewSourceTaskId.value = ''
+  await nextTick()
+  if (!disposed) document.getElementById(`sync-source-preview-${taskId}`)?.focus()
+}
+function nextRunDate(value: string) { return new Date(value).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }) }
+function nextRunClock(value: string) { return new Date(value).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
 function switchConfigSection(value: ConfigSection, focus = false) {
   if (working.value) return
   configSection.value = value
@@ -291,9 +310,17 @@ async function saveTask() {
       ...payload, ...(id ? { config_version: editorVersion.value } : {}),
     }, signal)
     if (signal.aborted || disposed) return
-    const section = configSection.value
-    clearRun(); setTask(saved); configSection.value = section
-    feedback.value = id ? '任务已保存。' : '任务已保存，定时执行默认关闭。'
+    clearRun(); setTask(saved)
+    if (id) updateTask(saved)
+    else {
+      tasks.value = [saved, ...(taskPage.value === 1 ? tasks.value : [])].slice(0, 20)
+      taskPage.value = 1; ++taskTotal.value
+    }
+    overview.value = true; pendingEditor.value = null
+    feedback.value = `“${saved.name}”已保存。${id ? '' : '定时执行默认关闭，可在列表开启或手动执行一次。'}`
+    await nextTick()
+    if (signal.aborted || disposed) return
+    document.getElementById('sync-task-list')?.focus()
     await loadTasks(false)
   })
 }
@@ -383,20 +410,20 @@ onUnmounted(() => {
     <div v-if="tab === 'config'" id="sync-panel-config" class="sync-content" role="tabpanel" aria-labelledby="sync-tab-config">
       <template v-if="overview">
         <div v-if="editing && dirty && !pendingEditor" class="sync-draft-notice" role="status"><span>未保存的配置：<b>{{ draft.name || '新建任务' }}</b></span><button type="button" :disabled="working" @click="continueEditing">继续编辑</button></div>
-        <section class="panel sync-task-list" aria-label="同步任务列表">
+        <section id="sync-task-list" class="panel sync-task-list" tabindex="-1" aria-label="同步任务列表">
           <div class="sync-task-table" role="table" aria-label="同步任务" :aria-busy="tasksLoading">
-            <div class="sync-task-table-head" role="rowgroup"><div class="sync-task-row" role="row"><span role="columnheader" class="sync-index-heading">序号</span><span role="columnheader">任务 / 人员来源</span><span role="columnheader">目标多维表</span><span role="columnheader">定时执行</span><span role="columnheader">下次运行 <small>北京时间</small></span><span role="columnheader">最近执行</span><span role="columnheader" class="sync-actions-heading">操作</span></div></div>
+            <div class="sync-task-table-head" role="rowgroup"><div class="sync-task-row" role="row"><span role="columnheader" class="sync-index-heading">序号</span><span role="columnheader">任务 / 人员来源</span><span role="columnheader">目标多维表</span><span role="columnheader">定时执行</span><span role="columnheader" class="sync-next-heading">下次运行<small>北京时间</small></span><span role="columnheader">最近执行</span><span role="columnheader" class="sync-actions-heading">操作</span></div></div>
             <div role="rowgroup">
               <div v-for="(task, index) in tasks" :key="task.id" class="sync-task-row sync-task-data" role="row">
                 <div class="sync-task-index" role="cell" :aria-label="`序号 ${(taskPage - 1) * 20 + index + 1}`">{{ (taskPage - 1) * 20 + index + 1 }}</div>
-                <div class="sync-task-info" role="cell"><b>{{ task.name }}</b><small>{{ sourceLabel(task) }}</small></div>
+                <div class="sync-task-info" role="cell"><b>{{ task.name }}</b><div class="sync-source-line"><small>{{ sourceLabel(task) }}</small><button :id="`sync-source-preview-${task.id}`" type="button" class="sync-source-preview" :aria-label="`查看名单范围：${task.name}`" :disabled="working || sourcesLoading" @click="showSourceRange(task)"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.5 8s2.2-4 6.5-4 6.5 4 6.5 4-2.2 4-6.5 4-6.5-4-6.5-4Z" /><circle cx="8" cy="8" r="1.8" /></svg>查看范围</button></div></div>
                 <div class="sync-task-target" role="cell"><a :href="task.target_url" target="_blank" rel="noopener noreferrer" :aria-label="`打开目标多维表：${task.table_name || task.name}`">{{ task.table_name || '待检查目标表' }}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9 3h4v4M13 3 7 9M6 3H3v10h10v-3" /></svg></a></div>
                 <div class="sync-task-schedule" role="cell">
                   <span class="sync-cell-label">定时执行</span>
                   <button type="button" class="sync-row-switch" role="switch" :aria-checked="task.enabled" :aria-label="`${task.name}的定时执行开关`" :aria-busy="pendingTaskId === task.id && pendingAction === 'enabled'" :disabled="working" :title="task.enabled ? '关闭后仍可手动执行' : '开启后按已保存的计划执行'" @click="toggleEnabled(task, true)"><span class="sync-switch-track" aria-hidden="true"><span /></span><span aria-live="polite">{{ task.enabled ? '已开启' : '已关闭' }}</span></button>
                   <small class="sync-cron" :title="`Cron：${task.cron}（北京时间）`">{{ task.cron }}</small>
                 </div>
-                <div class="sync-task-next" role="cell" aria-live="polite"><span class="sync-cell-label">下次运行 · 北京时间</span><time v-if="task.enabled && task.next_run_at" :datetime="task.next_run_at">{{ syncTime(task.next_run_at) }}</time><span v-else class="hint">{{ task.enabled ? '等待调度' : '未开启定时' }}</span></div>
+                <div class="sync-task-next" role="cell" aria-live="polite"><span class="sync-cell-label">下次运行 · 北京时间</span><time v-if="task.enabled && task.next_run_at" :datetime="task.next_run_at"><span>{{ nextRunDate(task.next_run_at) }}</span><small>{{ nextRunClock(task.next_run_at) }}</small></time><span v-else class="hint">{{ task.enabled ? '等待调度' : '未开启定时' }}</span></div>
                 <div class="sync-task-result" role="cell" aria-live="polite"><span class="sync-cell-label">最近执行</span><span v-if="task.active_run_id" class="sync-badge state-neutral">{{ activeRunLabel(task) }}</span><span v-else-if="task.last_status" class="sync-badge" :class="['failed', 'interrupted'].includes(task.last_status) ? 'state-error' : ['success', 'unchanged'].includes(task.last_status) ? 'state-good' : 'state-neutral'">{{ syncStatusLabels[task.last_status] }}</span><span v-else class="hint">尚未执行</span><small v-if="task.last_run_at">{{ syncTime(task.last_run_at) }}</small></div>
                 <div class="sync-task-actions" role="cell">
                   <div class="sync-row-actions">
@@ -452,7 +479,7 @@ onUnmounted(() => {
           </fieldset>
           <footer class="sync-config-footer">
             <div class="sync-save-status"><span class="hint" role="status">{{ saveHint }}</span><button v-if="selectedTask && !confirmDelete" type="button" class="sync-danger sync-delete-button" :disabled="working || !!selectedTask.active_run_id" @click="confirmDelete = true">删除任务</button><template v-if="confirmDelete"><span class="hint">删除任务？目标表数据和历史记录保留。</span><button type="button" :disabled="working" @click="confirmDelete = false">取消</button><button type="button" class="sync-danger" :disabled="working || !!selectedTask?.active_run_id" @click="removeTask">确认删除</button></template></div>
-            <div class="sync-save-actions"><button v-if="configSection !== 'source'" type="button" :disabled="working" @click="moveConfigSection(-1)">上一步</button><button v-if="configSection !== 'schedule'" type="button" :disabled="working" @click="moveConfigSection(1)">下一步</button><button type="submit" class="primary-button" :disabled="working || !canSave || stale || !!selectedTask?.active_run_id">{{ pendingAction === 'save' ? '正在保存…' : '保存任务' }}</button></div>
+            <div class="sync-save-actions"><button v-if="configSection !== 'source'" type="button" :disabled="working" @click="moveConfigSection(-1)">上一步</button><button v-if="configSection !== 'schedule'" type="button" :disabled="working" @click="moveConfigSection(1)">下一步</button><button type="submit" class="primary-button" :disabled="working || !canSave || stale || !!selectedTask?.active_run_id">{{ pendingAction === 'save' ? '正在保存…' : '保存并返回' }}</button></div>
           </footer>
         </form>
       </section>
@@ -476,6 +503,7 @@ onUnmounted(() => {
             <div v-if="logPages > 1" class="pagination"><button type="button" :disabled="detailsLoading || logPage <= 1" @click="changeLogPage(logPage - 1)">上一页</button><small>{{ logPage }} / {{ logPages }}</small><button type="button" :disabled="detailsLoading || logPage >= logPages" @click="changeLogPage(logPage + 1)">下一页</button></div>
           </section>
     </section>
+    <RecipientListPreview v-if="previewSource" :preset="previewSource" :directory="directory" :scope-label="previewSourceLabel" composition-only @close="closeSourceRange" />
   </main>
 </template>
 
@@ -486,6 +514,7 @@ onUnmounted(() => {
 .sync-page-actions,.sync-inline-actions,.sync-row-actions,.sync-toolbar,.sync-save-actions{display:flex;align-items:center;gap:8px}.sync-page-actions>button{display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;font-family:var(--sans)}.sync-page-actions .primary-button{width:auto;padding:8px 12px;font-size:var(--fs-sm)}.sync-page-actions svg,.sync-back-button svg{width:15px;height:15px;flex:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .sync-feedback{margin:0;padding:12px 16px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);font-size:var(--fs-sm);overflow-wrap:anywhere}.sync-success{color:var(--plus-ink)}
 .sync-task-list{padding:0;overflow:hidden;box-shadow:var(--shadow-soft)}.sync-task-table{overflow:auto}.sync-task-row{display:grid;grid-template-columns:36px minmax(115px,1fr) minmax(145px,1.25fr) 100px 132px 120px 264px;align-items:center;gap:12px;padding:20px;font-size:var(--fs-sm)}.sync-task-table-head{background:var(--surface-2);color:var(--muted)}.sync-task-table-head .sync-task-row{padding-top:12px;padding-bottom:12px;font-size:var(--fs-xs);font-weight:500}.sync-task-table-head small{display:inline;margin:0 0 0 4px;font-size:10px;font-weight:400;white-space:nowrap}.sync-actions-heading,.sync-index-heading,.sync-task-index{text-align:center}.sync-task-index{color:var(--muted);font-family:var(--mono);font-size:var(--fs-xs)}.sync-task-data+.sync-task-data{border-top:1px solid var(--line)}.sync-task-data:hover{background:#FAFBFC}.sync-task-row [role=cell]{min-width:0}.sync-task-info b{font-weight:600;overflow-wrap:anywhere}.sync-task-row small{display:block;margin-top:5px;color:var(--muted);font-size:var(--fs-xs);overflow-wrap:anywhere}.sync-task-target a{overflow-wrap:anywhere;line-height:1.8}.sync-task-target a:hover{color:var(--accent-deep);text-decoration:underline;text-underline-offset:3px}.sync-task-target svg{display:inline-block;width:12px;height:12px;margin-left:5px;vertical-align:-1px;stroke:currentColor;stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round;color:var(--muted)}.sync-task-next time{font-size:var(--fs-sm);line-height:1.8;font-variant-numeric:tabular-nums}.sync-task-result small{font-size:10px;font-variant-numeric:tabular-nums}.sync-task-result .hint{margin:0}.sync-cell-label{display:none}
+.sync-source-line{display:flex;align-items:center;gap:3px 10px;flex-wrap:wrap;margin-top:5px}.sync-source-line small{margin:0}.sync-source-preview{display:inline-flex;align-items:center;gap:4px;padding:2px 0;border:0;background:transparent;color:var(--accent-deep);font-family:var(--sans);font-size:var(--fs-xs);font-weight:400;white-space:nowrap}.sync-source-preview:hover:not(:disabled){text-decoration:underline;text-underline-offset:3px}.sync-source-preview svg{width:13px;height:13px;stroke:currentColor;stroke-width:1.3;stroke-linejoin:round}.sync-next-heading,.sync-task-next{text-align:center}.sync-task-table-head .sync-next-heading small{display:block;margin:3px 0 0;font-size:var(--fs-xs)}.sync-task-next time{display:inline-flex;flex-direction:column;align-items:center;gap:3px;font-size:var(--fs-sm);line-height:1.6;white-space:nowrap}.sync-task-next time small{margin:0;font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
 .sync-row-switch{display:inline-flex;align-items:center;gap:7px;padding:5px 0;border:0;background:transparent;color:var(--muted);font-family:var(--sans);font-size:var(--fs-xs);font-weight:500;white-space:nowrap}.sync-row-switch[aria-checked=true]{color:var(--plus-ink)}.sync-switch-track{position:relative;display:block;flex:none;width:30px;height:18px;border:1px solid var(--control-line);border-radius:10px;background:var(--surface-2);transition:background .15s,border-color .15s}.sync-switch-track>span{position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--control-line);transition:transform .15s,background .15s}.sync-row-switch[aria-checked=true] .sync-switch-track{border-color:var(--plus-ink);background:var(--plus-ink)}.sync-row-switch[aria-checked=true] .sync-switch-track>span{background:white;transform:translateX(12px)}.sync-task-schedule .sync-cron{margin-top:3px;font-family:var(--mono);font-size:var(--fs-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sync-row-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.sync-row-actions>button{display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%;min-width:0;min-height:32px;border:1px solid var(--line);background:var(--surface);color:var(--text);font-size:var(--fs-xs);padding:6px 5px;white-space:nowrap;font-family:var(--sans);font-weight:500}.sync-row-actions>button:hover:not(:disabled){border-color:var(--accent-deep);background:var(--accent-soft);color:var(--accent-deep)}.sync-row-actions svg{width:13px;height:13px;flex:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}.sync-row-actions [aria-busy=true] svg{display:none}.sync-task-actions .sync-action-hint{text-align:center}.sync-row-error{margin:8px 0 0;font-size:var(--fs-xs);text-align:center;overflow-wrap:anywhere}
 .sync-badge{display:inline-flex;align-items:center;padding:2px 8px;font-size:var(--fs-xs);border-radius:var(--r-sm);white-space:nowrap;font-weight:400}.state-good{color:var(--plus-ink);background:var(--plus-soft)}.state-neutral{color:var(--muted);background:var(--surface-2)}.state-error{color:var(--minus-ink);background:var(--minus-soft)}
@@ -500,7 +529,7 @@ onUnmounted(() => {
 .sync-run-filters{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}.sync-run-filters select{max-width:180px}.sync-run-item{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;margin-top:10px;padding:12px 16px;text-align:left;background:var(--surface);font-family:var(--sans);border-color:var(--line)}.sync-run-item.selected{background:var(--accent-soft);border-color:var(--accent)}.sync-run-item>span:first-child{min-width:0}.sync-run-item b{font-size:var(--fs-sm);font-weight:500}.sync-run-item small{display:block;color:var(--muted);font-weight:400;margin-top:4px;overflow-wrap:anywhere}.sync-run-item small.error-text{color:var(--minus-ink)}
 .sync-run-detail{margin-top:24px;border-top:1px solid var(--line);padding-top:22px}.sync-run-times{display:flex;flex-wrap:wrap;gap:6px 18px;color:var(--muted);font-size:var(--fs-xs);margin-top:12px}.sync-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:18px 0 12px}.sync-summary>div{padding:12px;background:var(--surface-2);border-radius:var(--r-md);min-width:0}.sync-summary span{display:block;font-size:var(--fs-xs);color:var(--muted)}.sync-summary b{display:block;margin-top:4px;font-family:var(--mono);font-size:20px;overflow-wrap:anywhere}.sync-empty-source{padding:10px 12px;color:var(--minus-ink);background:var(--minus-soft);font-size:var(--fs-sm);border-radius:var(--r-md)}.sync-run-detail .sync-section-head{margin-top:20px}.sync-run-detail .sync-section-head>select{max-width:120px;font-size:var(--fs-sm)}
 .sync-table-wrap{overflow:auto;margin-top:12px;border:1px solid var(--line);border-radius:var(--r-md)}.sync-result-table{width:100%;border-collapse:collapse;text-align:left;font-size:var(--fs-sm)}.sync-result-table th{background:var(--surface-2);color:var(--muted);font-size:var(--fs-xs);font-weight:500}.sync-result-table th,.sync-result-table td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere;min-width:70px}.sync-result-table td:nth-child(3){min-width:130px}.sync-result-table td:nth-child(4){font-family:var(--mono)}.sync-result-table tr:last-child td{border-bottom:0}.sync-table-empty{text-align:center;color:var(--muted);height:80px}.sync-run-detail>h3{margin-top:24px}.sync-events{padding:0;list-style:none;margin:0}.sync-events>li{border-left:2px solid var(--line);padding:0 0 16px 14px;font-size:var(--fs-sm)}.sync-events time{font-family:var(--mono);color:var(--muted);font-size:var(--fs-xs)}.sync-log-level{margin-left:10px;font-size:var(--fs-xs)}.sync-events p{margin:5px 0;white-space:pre-wrap;overflow-wrap:anywhere}.sync-events summary{font-size:var(--fs-xs);color:var(--accent-deep)}.sync-events pre{padding:10px;background:var(--surface-2);border-radius:var(--r-md);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-xs)}
-@media(max-width:1260px){.sync-task-table-head{display:none}.sync-task-row{position:relative;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px;padding:20px}.sync-task-info,.sync-task-target,.sync-task-result,.sync-task-actions{grid-column:1 / -1}.sync-task-index{display:flex;align-items:center;justify-content:center;position:absolute;top:20px;left:20px;width:28px;height:28px;border-radius:var(--r-sm);background:var(--surface-2)}.sync-task-info{padding-left:40px}.sync-task-info b{font-size:var(--fs-md)}.sync-cell-label{display:block;font-size:var(--fs-xs);color:var(--muted);margin-bottom:6px}.sync-task-actions{border-top:1px solid var(--line);padding-top:14px}.sync-task-result{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sync-task-result .sync-cell-label{margin:0}.sync-task-result small{margin:0 0 0 auto}.sync-editor-heading{align-items:flex-start}.sync-editor-heading>div{align-items:flex-start;flex-direction:column;gap:8px}.sync-editor-heading h2{border:0;padding:0}.sync-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.sync-run-times{display:grid;gap:4px}.sync-list-footer{padding:14px 20px}}
+@media(max-width:1260px){.sync-task-table-head{display:none}.sync-task-row{position:relative;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px;padding:20px}.sync-task-info,.sync-task-target,.sync-task-next,.sync-task-result,.sync-task-actions{grid-column:1 / -1}.sync-task-index{display:flex;align-items:center;justify-content:center;position:absolute;top:20px;left:20px;width:28px;height:28px;border-radius:var(--r-sm);background:var(--surface-2)}.sync-task-info{padding-left:40px}.sync-task-info b{font-size:var(--fs-md)}.sync-cell-label{display:block;font-size:var(--fs-xs);color:var(--muted);margin-bottom:6px}.sync-task-actions{border-top:1px solid var(--line);padding-top:14px}.sync-task-result{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sync-task-result .sync-cell-label{margin:0}.sync-task-result small{margin:0 0 0 auto}.sync-task-next{display:flex;align-items:center;justify-content:flex-start;gap:8px;text-align:left}.sync-task-next .sync-cell-label{margin:0}.sync-task-next time{align-items:flex-start}.sync-editor-heading{align-items:flex-start}.sync-editor-heading>div{align-items:flex-start;flex-direction:column;gap:8px}.sync-editor-heading h2{border:0;padding:0}.sync-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.sync-run-times{display:grid;gap:4px}.sync-list-footer{padding:14px 20px}}
 @media(max-width:1000px){.sync-config-top{flex-wrap:wrap;gap:14px}.sync-config-name{max-width:none;flex-basis:100%}.sync-config-tabs>button{padding:10px;gap:8px}.sync-schedule-layout{grid-template-columns:1fr}}
 @media(max-width:640px){.sync-draft-notice{flex-wrap:wrap}.sync-draft-notice .sync-inline-actions{flex-wrap:wrap}.sync-navigation{flex-wrap:wrap;gap:10px}.sync-tabs{flex:1}.sync-tabs button{padding:10px 12px}.sync-page-actions{margin-left:auto}.sync-input-action{flex-wrap:wrap}.sync-input-action>input{flex-basis:100%}.sync-input-action>button{width:100%}.sync-mappings{grid-template-columns:1fr}.sync-runs>.sync-section-head{align-items:flex-start;flex-wrap:wrap}.sync-summary{gap:6px}.sync-summary>div{padding:8px 6px}.sync-summary b{font-size:17px}.sync-run-filters select{flex:1;max-width:none}.sync-config-top{padding:18px 16px}.sync-config-notice{padding-left:16px;padding-right:16px}.sync-config-tabs{margin:0 16px;gap:6px;padding-bottom:16px}.sync-config-tabs>button{padding:10px 4px;justify-content:center}.sync-config-tabs .sync-step-number,.sync-config-tabs small{display:none}.sync-config-tabs b{font-size:var(--fs-sm)}.sync-form-section{padding:18px 16px;min-height:280px}.sync-config-footer{padding:12px 16px;flex-wrap:wrap;gap:10px}.sync-save-actions{margin-left:auto;gap:6px}.sync-save-actions>button{min-width:0;padding:8px 12px}.sync-save-status{flex-basis:100%;justify-content:space-between}.sync-schedule{flex-wrap:wrap}}
 @media(max-width:480px){.sync-row-actions svg{display:none}}

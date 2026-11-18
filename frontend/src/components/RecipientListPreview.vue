@@ -5,7 +5,7 @@ import { statusLabels } from '../types'
 import type { Directory, Person, Preset } from '../types'
 import EmployeeAvatar from './EmployeeAvatar.vue'
 
-const props = defineProps<{ preset: Preset; directory: Directory }>()
+const props = defineProps<{ preset: Preset; directory: Directory; compositionOnly?: boolean; scopeLabel?: string }>()
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement | null>(null)
 const list = ref<HTMLElement | null>(null)
@@ -99,27 +99,28 @@ watch([page, query], async () => { await nextTick(); if (list.value) list.value.
 onMounted(async () => {
   await nextTick()
   dialog.value?.showModal()
-  void load()
+  if (!props.compositionOnly) void load()
 })
 onUnmounted(() => { request?.abort(); dialog.value?.close() })
 </script>
 
 <template>
-  <dialog ref="dialog" class="panel modal recipient-list-preview" :aria-labelledby="titleId" @cancel.prevent="emit('close')" @keydown="trapFocus" @keydown.esc.prevent.stop="emit('close')" @click="backdrop">
-    <div class="preview-heading"><h2 :id="titleId" class="panel-title">名单预览</h2><button type="button" class="preview-close" aria-label="关闭名单预览" autofocus @click="emit('close')"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg></button></div>
-    <div class="list-preview-name"><strong>{{ preset.name }}</strong><span>{{ preset.scope === 'public' ? '公共名单' : '我的名单' }}</span></div>
+  <dialog ref="dialog" class="panel modal recipient-list-preview" :class="{ 'composition-only': compositionOnly }" :aria-labelledby="titleId" @cancel.prevent="emit('close')" @keydown="trapFocus" @keydown.esc.prevent.stop="emit('close')" @click="backdrop">
+    <div class="preview-heading"><h2 :id="titleId" class="panel-title">{{ compositionOnly ? '名单范围' : '名单预览' }}</h2><button type="button" class="preview-close" :aria-label="compositionOnly ? '关闭名单范围' : '关闭名单预览'" autofocus @click="emit('close')"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg></button></div>
+    <div class="list-preview-name"><strong>{{ preset.name }}</strong><span>{{ scopeLabel || (preset.scope === 'public' ? '公共名单' : '我的名单') }}</span></div>
     <details class="list-preview-composition" open>
       <summary><strong>名单组成</strong><span>{{ compositionSummary }}</span><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 8 5 5 5-5" /></svg></summary>
       <div class="composition-content">
         <div v-for="group in compositionGroups" :key="group.key" class="composition-group">
-          <div class="composition-label">{{ group.label }}<small v-if="group.hint">{{ group.hint }}</small></div>
+          <div class="composition-label">{{ group.label }}<small v-if="group.hint">{{ group.hint }}</small><span v-if="compositionOnly" class="composition-count">{{ group.items.length }} 项</span></div>
           <div class="composition-items"><span v-for="item in group.items" :key="item.id" class="composition-item" :class="{ unavailable: item.unavailable }" :title="item.title"><EmployeeAvatar v-if="group.kind === 'person'" :src="item.avatar" :name="item.name" size="tiny" /><span>{{ item.name }}<small v-if="item.status">（{{ item.status }}）</small></span></span></div>
         </div>
         <p v-if="!compositionGroups.length" class="composition-empty">未设置部门或人员</p>
         <p class="composition-rule">{{ compositionRule }}</p>
       </div>
     </details>
-    <div v-if="loading" class="list-preview-empty" role="status"><span class="recipient-spinner" aria-hidden="true"></span>正在匹配人员…</div>
+    <p v-if="compositionOnly" class="composition-preview-note">当前展示已保存的选择范围，实际同步按执行时的最新在职名单计算。</p>
+    <div v-else-if="loading" class="list-preview-empty" role="status"><span class="recipient-spinner" aria-hidden="true"></span>正在匹配人员…</div>
     <div v-else-if="error" class="list-preview-empty"><p class="error-text" role="alert">{{ error }}</p><button type="button" @click="load">重新加载</button></div>
     <template v-else>
       <div class="list-preview-toolbar"><span><b>{{ people.length }}</b> 位通知对象</span><input v-model="query" type="search" aria-label="搜索预览名单人员" placeholder="搜索姓名或部门" autocomplete="off" @input="page = 1"></div>
@@ -162,6 +163,7 @@ onUnmounted(() => { request?.abort(); dialog.value?.close() })
 .composition-item.unavailable{color:var(--minus-ink);border-color:var(--minus-soft)}
 .composition-item small{font-size:inherit}
 .composition-rule,.composition-empty{margin:8px 0 0;color:var(--muted);font-size:var(--fs-xs);line-height:1.7}
+.composition-only .composition-content{max-height:52dvh;padding:0 16px 16px}.composition-only .composition-group+.composition-group{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}.composition-only .list-preview-name>span{max-width:55%;overflow-wrap:anywhere}.composition-only .composition-items{gap:8px}.composition-only .composition-item{padding:6px 9px}.composition-count{margin-left:auto;color:var(--muted);font-size:var(--fs-xs)}.composition-preview-note{margin:0;color:var(--muted);font-size:var(--fs-xs)}
 .list-preview-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;font-size:var(--fs-sm);color:var(--muted)}
 .list-preview-toolbar>span{white-space:nowrap}.list-preview-toolbar b{font-family:var(--mono);color:var(--text)}
 .list-preview-toolbar input{width:240px;font-size:var(--fs-sm);padding:7px 10px}

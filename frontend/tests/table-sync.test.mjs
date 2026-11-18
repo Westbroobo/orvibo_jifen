@@ -22,7 +22,7 @@ for (const name of ['api', 'types', 'tableSync']) {
 const source = readFileSync(resolve(frontend, 'src/components/TableSyncPanel.vue'), 'utf8')
 const descriptor = parse(source).descriptor
 let compiled = compileScript(descriptor, { id: 'table-sync-regression', inlineTemplate: true, templateOptions: { compilerOptions: { hoistStatic: false } } }).content
-const children = [...source.matchAll(/import (\w+) from '\.\/[^']+\.vue'/g)].map(match => match[1])
+const children = [...source.matchAll(/import (\w+) from '\.\/[^']+\.vue'/g)].map(match => match[1]).concat('EmployeeAvatar')
 writeFileSync(resolve(cache, 'children.mjs'), `import { defineComponent, h } from ${JSON.stringify(vueUrl)};\n` + children.map(name =>
   `export const ${name} = defineComponent({ name: '${name}', inheritAttrs: false, setup(_, { attrs }) { return () => h('test-control', { ...attrs, 'data-component': '${name}' }) } });`,
 ).join('\n'))
@@ -31,6 +31,13 @@ compiled = compiled.replace(/import (\w+) from '\.\/[^']+\.vue'/g, 'import { $1 
 compiled = compiled.replace(/from ['"]\.\.\/(api|types|tableSync)['"]/g, 'from "./$1.mjs"')
 writeFileSync(resolve(cache, 'TableSyncPanel.mjs'), transpile(compiled))
 const TableSyncPanel = (await import(pathToFileURL(resolve(cache, 'TableSyncPanel.mjs')).href)).default
+const rangeSource = readFileSync(resolve(frontend, 'src/components/RecipientListPreview.vue'), 'utf8')
+let rangeCompiled = compileScript(parse(rangeSource).descriptor, { id: 'source-range-preview', inlineTemplate: true, templateOptions: { compilerOptions: { hoistStatic: false } } }).content
+rangeCompiled = rangeCompiled.replace(/from ['"]vue['"]/g, `from ${JSON.stringify(vueUrl)}`)
+rangeCompiled = rangeCompiled.replace(/from ['"]\.\.\/(api|types)['"]/g, 'from "./$1.mjs"')
+rangeCompiled = rangeCompiled.replace(/import EmployeeAvatar from '\.\/EmployeeAvatar.vue'/g, 'import { EmployeeAvatar } from "./children.mjs"')
+writeFileSync(resolve(cache, 'RecipientListPreview.mjs'), transpile(rangeCompiled))
+const RangePreview = (await import(pathToFileURL(resolve(cache, 'RecipientListPreview.mjs')).href)).default
 
 class Element extends EventTarget {
   constructor(tag, text = '') { super(); this.tag = tag; this.tagName = tag.toUpperCase(); this.text = text; this.props = {}; this.children = []; this.parent = null; this.value = ''; this.style = {}; this.isConnected = true; this.selected = false; this.multiple = false }
@@ -40,6 +47,8 @@ class Element extends EventTarget {
   removeAttribute(name) { delete this.props[name] }
   getRootNode() { return document }
   focus() { document.activeElement = this }
+  showModal() { this.props.open = true }
+  close() { this.props.open = false }
 }
 const renderer = createRenderer({
   createElement: tag => new Element(tag), createText: text => new Element('#text', text), createComment: text => new Element('#comment', text),
@@ -69,7 +78,7 @@ const taskFixture = {
 }
 const emptySummary = { source: 0, target: 0, create: 0, update: 0, delete: 0, duplicate: 0, unchanged: 0 }
 
-async function mount(t, overrides = {}) {
+async function mount(t, overrides = {}, rangeProps = null) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1_795_000_000_000 })
   const old = new Map(['window', 'document', 'Document', 'ShadowRoot', 'HTMLElement', 'fetch'].map(key => [key, globalThis[key]]))
   const body = new Element('body')
@@ -90,6 +99,7 @@ async function mount(t, overrides = {}) {
     requests.push(request)
     const waiting = held.find(item => !item.used && item.path === path && (!item.method || item.method === options.method))
     if (waiting) { waiting.used = true; waiting.request = request; return waiting.promise }
+    if (path === '/api/ranges/resolve') return Promise.resolve(reply({ people: [], warnings: [] }))
     if (path === '/api/table-sync/sources') return Promise.resolve(reply({
       presets: [
         { id: 'public', name: '公共名单', scope: 'public', can_edit: true, selection },
@@ -138,7 +148,7 @@ async function mount(t, overrides = {}) {
     if (/\/runs\/[^/]+$/.test(path)) return Promise.resolve(reply(copy(state.runs.find(run => path.endsWith(run.id)))))
     throw new Error(`Unexpected table-sync test request ${options.method} ${url}`)
   }
-  const root = new Element('root'), app = renderer.createApp(TableSyncPanel)
+  const root = new Element('root'), app = rangeProps ? renderer.createApp(RangePreview, rangeProps) : renderer.createApp(TableSyncPanel)
   document.getElementById = id => nodes(root).find(node => node.props.id === id) ?? null
   app.config.warnHandler = message => { throw new Error(message) }
   app.mount(root); await settle()
@@ -193,7 +203,7 @@ test('an empty task-only selection can be saved without creating a public preset
   const h = await mount(t)
   await h.click('新建任务'); await h.setField('sync-name', '空名单同步')
   await h.setField('sync-url', taskFixture.target_url, 'onInput'); await h.click('读取目标表')
-  assert.equal(h.button('保存任务').props.disabled, false)
+  assert.equal(h.button('保存并返回').props.disabled, false)
   await h.find(node => node.tag === 'form').props.onSubmit(new Event('submit')); await settle()
   const saved = h.requests.find(request => request.path === '/api/table-sync/tasks' && request.method === 'POST')
   assert.deepEqual(saved.body.selection.person_ids, [])
@@ -201,6 +211,69 @@ test('an empty task-only selection can be saved without creating a public preset
   assert.equal(saved.body.cron, '0 4 * * *'); assert.equal(saved.body.enabled, undefined)
   assert.equal(h.state.tasks.at(-1).enabled, false)
   assert.equal(h.requests.some(request => request.path === '/api/presets'), false)
+  assert.equal(nodes(h.root).some(node => node.tag === 'form'), false)
+  assert.match(text(h.taskRow('空名单同步')), /未开启定时/)
+  assert.match(h.text(), /“空名单同步”已保存/)
+  assert.equal(document.activeElement.props.id, 'sync-task-list')
+  assert.equal(h.requests.some(request => request.path.endsWith('/run')), false)
+})
+
+test('saving an edited task waits for success before returning and prevents duplicate submissions', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-name', '更新后的同步任务')
+  await h.clickAria('定时计划'); await h.setField('sync-cron', '0 9 * * *')
+  const pending = h.hold('/api/table-sync/tasks/task-1', 'PUT')
+  const form = h.find(node => node.tag === 'form')
+  form.props.onSubmit(new Event('submit')); form.props.onSubmit(new Event('submit')); await settle()
+  assert.equal(h.requests.filter(request => request.method === 'PUT').length, 1)
+  assert.equal(h.button('正在保存…').props.disabled, true)
+  assert.equal(h.ariaButton('定时计划').props['aria-selected'], true)
+  const saved = { ...copy(taskFixture), name: '更新后的同步任务', cron: '0 9 * * *', config_version: 2 }
+  Object.assign(h.state.tasks[0], saved)
+  pending.resolve(h.result(copy(saved))); await settle()
+  assert.equal(nodes(h.root).some(node => node.tag === 'form'), false)
+  assert.match(text(h.taskRow(saved.name)), /0 9 \* \* \*/)
+  assert.match(h.text(), /“更新后的同步任务”已保存/)
+  assert.equal(document.activeElement.props.id, 'sync-task-list')
+  assert.equal(h.text().includes('未保存的配置'), false)
+  await h.openTask(saved.name)
+  assert.equal(h.field('sync-cron').value, saved.cron)
+  assert.equal(h.button('手动执行一次').props.disabled, false)
+})
+
+test('a failed save preserves the current section and complete draft for retry', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-name', '保存失败后保留的草稿')
+  const chosen = { ...copy(selection), department_ids: ['department-1'], person_ids: ['person-1'] }
+  h.component('RecipientRangeEditor').props['onUpdate:modelValue'](chosen); await settle()
+  await h.clickAria('定时计划'); await h.setField('sync-cron', '0 9 * * *')
+  const pending = h.hold('/api/table-sync/tasks/task-1', 'PUT')
+  h.find(node => node.tag === 'form').props.onSubmit(new Event('submit')); await settle()
+  pending.resolve({ ok: false, status: 500, json: async () => ({ detail: '保存失败，请重试' }) }); await settle()
+  assert.equal(h.ariaButton('定时计划').props['aria-selected'], true)
+  assert.equal(h.field('sync-name').value, '保存失败后保留的草稿')
+  assert.equal(h.field('sync-cron').value, '0 9 * * *')
+  assert.deepEqual(h.component('RecipientRangeEditor').props.modelValue, chosen)
+  assert.match(h.text(), /保存失败，请重试/)
+  assert.equal(h.button('保存并返回').props.disabled, false)
+  assert.equal(h.text().includes('”已保存'), false)
+  h.find(node => node.tag === 'form').props.onSubmit(new Event('submit')); await settle()
+  assert.equal(nodes(h.root).some(node => node.tag === 'form'), false)
+  assert.match(text(h.taskRow('保存失败后保留的草稿')), /0 9 \* \* \*/)
+})
+
+test('a failed list refresh after saving keeps the saved task visible and returns to the list', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-name', '已保存但列表刷新失败')
+  const pending = h.hold('/api/table-sync/tasks', 'GET')
+  h.find(node => node.tag === 'form').props.onSubmit(new Event('submit')); await settle()
+  assert.equal(pending.used, true)
+  assert.equal(nodes(h.root).some(node => node.tag === 'form'), false)
+  assert.ok(h.taskRow('已保存但列表刷新失败'))
+  pending.resolve({ ok: false, status: 500, json: async () => ({ detail: '暂时无法刷新列表' }) }); await settle()
+  assert.match(h.text(), /“已保存但列表刷新失败”已保存/)
+  assert.match(h.text(), /暂时无法刷新列表/)
+  assert.ok(h.taskRow('已保存但列表刷新失败'))
 })
 
 test('public source mode exposes only public presets and uses the selected reference', async t => {
@@ -224,7 +297,7 @@ test('field inspection offers writable text fields and leaves generated fields u
   const options = h.field('sync-field-name').options.map(node => node.value)
   assert.ok(options.includes('fld-name')); assert.equal(options.includes('sequence'), false); assert.equal(options.includes('formula'), false)
   await h.setField('sync-field-user_id', 'fld-name')
-  assert.equal(h.button('保存任务').props.disabled, true)
+  assert.equal(h.button('保存并返回').props.disabled, true)
 })
 
 test('configuration sections preserve selected people and fields without automatic inspection or writes', async t => {
@@ -260,7 +333,7 @@ test('saving from a configuration section submits the complete source target and
   await h.setField('sync-url', taskFixture.target_url, 'onInput'); await h.click('读取目标表')
   await h.clickAria('定时计划'); await h.setField('sync-cron', '0 9 * * 1-5', 'onInput')
   await h.clickAria('人员来源')
-  assert.equal(h.button('保存任务').props.disabled, false)
+  assert.equal(h.button('保存并返回').props.disabled, false)
   await h.find(node => node.tag === 'form').props.onSubmit(new Event('submit')); await settle()
   const saves = h.requests.filter(request => request.path === '/api/table-sync/tasks' && request.method === 'POST')
   assert.equal(saves.length, 1)
@@ -438,6 +511,67 @@ test('overview history opens the chosen task records while preserving an unrelat
   assert.equal(h.requests.some(request => request.method === 'POST' || request.method === 'PUT'), false)
 })
 
+test('viewing a task range uses saved selection and preserves an unrelated unsaved draft without requests', async t => {
+  const savedSelection = { ...copy(selection), department_ids: ['saved-dept'], person_ids: ['saved-person'] }
+  const h = await mount(t, { tasks: [{ ...copy(taskFixture), selection: savedSelection }] })
+  await h.openTask(); await h.setField('sync-name', '仍在编辑的草稿')
+  h.component('RecipientRangeEditor').props['onUpdate:modelValue']({ ...copy(selection), person_ids: ['unsaved-person'] }); await settle()
+  await h.click('返回任务列表')
+  const initialRequests = h.requests.length
+  await h.clickAria(`查看名单范围：${taskFixture.name}`)
+  const preview = h.component('RecipientListPreview')
+  assert.deepEqual(preview.props.preset.selection, savedSelection)
+  assert.equal(preview.props.preset.can_edit, false)
+  assert.equal(preview.props['composition-only'], '')
+  assert.equal(preview.props['scope-label'], '任务专属名单')
+  assert.equal(h.requests.length, initialRequests)
+  preview.props.onClose(); await settle()
+  assert.equal(document.activeElement.props.id, 'sync-source-preview-task-1')
+  await h.click('继续编辑')
+  assert.equal(h.field('sync-name').value, '仍在编辑的草稿')
+  assert.deepEqual(h.component('RecipientRangeEditor').props.modelValue.person_ids, ['unsaved-person'])
+})
+
+test('viewing a referenced public range uses the preset and explains a missing reference', async t => {
+  const h = await mount(t, { tasks: [{ ...copy(taskFixture), source_kind: 'preset', preset_id: 'public', selection: {} }] })
+  await h.clickAria(`查看名单范围：${taskFixture.name}`)
+  const preview = h.component('RecipientListPreview')
+  assert.deepEqual(preview.props.preset.selection, selection)
+  assert.equal(preview.props['scope-label'], '公共名单 · 公共名单')
+  preview.props.onClose(); await settle()
+  h.state.tasks[0].preset_id = 'missing'
+  await h.click('刷新'); await h.clickAria(`查看名单范围：${taskFixture.name}`)
+  assert.match(h.text(), /引用的公共名单已不存在或未能加载/)
+  assert.equal(nodes(h.root).some(node => node.props['data-component'] === 'RecipientListPreview'), false)
+  assert.equal(h.requests.some(request => request.method === 'POST'), false)
+})
+
+test('the real range-only dialog shows department paths and specified people without resolving or enqueueing', async t => {
+  const range = { ...copy(selection), department_ids: ['d1'], person_ids: ['p1'], extra_ids: ['p1', 'p2'] }
+  const directory = { people: [
+    { id: 'p1', name: '张三', status: 'active', paths: [], avatar_url: '' },
+    { id: 'p2', name: '李四', status: 'resigned', paths: [], avatar_url: '' },
+  ], departments: [{ id: 'd1', name: '研发组', path_ids: ['d0', 'd1'], path_names: ['技术中心', '研发组'] }] }
+  let closed = false
+  const h = await mount(t, {}, { preset: { id: 'range', name: '战报名单', scope: 'personal', can_edit: false, selection: range }, directory, compositionOnly: true, scopeLabel: '任务专属名单', onClose: () => { closed = true } })
+  assert.match(h.text(), /名单范围/); assert.match(h.text(), /技术中心 \/ 研发组/)
+  assert.match(h.text(), /部门全员/); assert.match(h.text(), /指定人员/)
+  assert.match(h.text(), /张三/); assert.match(h.text(), /李四（离职）/)
+  assert.equal((h.text().match(/张三/g) ?? []).length, 1)
+  assert.equal(h.text().includes('正在匹配人员'), false)
+  assert.equal(h.text().includes('位通知对象'), false)
+  assert.equal(h.requests.length, 0)
+  await h.clickAria('关闭名单范围')
+  assert.equal(closed, true)
+})
+
+test('the regular list preview still resolves notification people by default', async t => {
+  const h = await mount(t, {}, { preset: { id: 'regular', name: '原名单预览', scope: 'public', can_edit: false, selection: copy(selection) }, directory: { people: [], departments: [] } })
+  assert.equal(h.requests.length, 1)
+  assert.equal(h.requests[0].path, '/api/ranges/resolve')
+  assert.match(h.text(), /名单预览/); assert.match(h.text(), /位通知对象/)
+})
+
 test('overview schedule switches update the next run independently of manual execution and cron', async t => {
   const h = await mount(t)
   const label = `${taskFixture.name}的定时执行开关`
@@ -446,7 +580,10 @@ test('overview schedule switches update the next run independently of manual exe
   assert.match(text(h.taskRow(taskFixture.name)), /未开启定时/)
   await h.clickAria(label)
   assert.equal(h.ariaButton(label).props['aria-checked'], true)
-  assert.match(text(h.taskRow(taskFixture.name)), /2026\/11\/19 04:00:00/)
+  const time = nodes(h.taskRow(taskFixture.name)).find(node => node.tag === 'time')
+  assert.equal(time.props.datetime, '2026-11-18T20:00:00Z')
+  assert.ok(time.children.some(node => node.tag === 'span' && text(node) === '2026/11/19'))
+  assert.ok(time.children.some(node => node.tag === 'small' && text(node) === '04:00:00'))
   await h.clickAria(label)
   assert.equal(h.ariaButton(label).props['aria-checked'], false)
   assert.match(text(h.taskRow(taskFixture.name)), /未开启定时/)
@@ -600,7 +737,7 @@ test('a newer server config does not silently replace the editor version', async
   h.state.tasks[0].config_version = 2; h.state.tasks[0].name = '其他管理员已修改'
   await h.click('刷新')
   assert.equal(h.field('sync-name').value, '本地尚未保存')
-  assert.equal(h.button('保存任务').props.disabled, true)
+  assert.equal(h.button('保存并返回').props.disabled, true)
   assert.equal(h.button('手动执行一次').props.disabled, true)
   assert.match(h.text(), /任务配置已被其他管理员更新/)
   await h.openTask(); await h.click('放弃修改并继续')
