@@ -6,7 +6,7 @@ import type { Department, Person, Selection } from '../types'
 import EmployeeAvatar from './EmployeeAvatar.vue'
 import PeoplePicker from './PeoplePicker.vue'
 
-const props = defineProps<{ modelValue: Selection; people: Person[]; departments: Department[] }>()
+const props = defineProps<{ modelValue: Selection; people: Person[]; departments: Department[]; columns?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: Selection]; ready: [value: boolean] }>()
 const departmentQuery = ref('')
 const personQuery = ref('')
@@ -63,7 +63,7 @@ onUnmounted(() => { ++sequence; clearTimeout(timer) })
 </script>
 
 <template>
-  <div class="range-editor">
+  <div class="range-editor" :class="{ 'range-columns': columns && isUnion }">
     <template v-if="isUnion">
       <div>
         <div class="field-label">部门全员 <small>含下级部门，多个部门合并</small></div>
@@ -131,4 +131,10 @@ onUnmounted(() => { ++sequence; clearTimeout(timer) })
 .legacy-notice{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:var(--fs-xs);color:var(--muted)}
 .legacy-notice button{font-size:var(--fs-xs);padding:5px 10px}
 .chip{max-width:100%;overflow-wrap:anywhere}
+.range-editor.range-columns{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.range-columns>div{min-width:0}
+.range-columns .options{height:200px;max-height:200px}
+.range-columns .chips{max-height:96px;overflow:auto}
+.range-columns>.range-result{grid-column:1 / -1}
+@media(max-width:820px){.range-editor.range-columns{grid-template-columns:minmax(0,1fr)}}
 </style>

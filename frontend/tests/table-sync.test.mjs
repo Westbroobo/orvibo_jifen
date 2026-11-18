@@ -139,6 +139,7 @@ async function mount(t, overrides = {}) {
     throw new Error(`Unexpected table-sync test request ${options.method} ${url}`)
   }
   const root = new Element('root'), app = renderer.createApp(TableSyncPanel)
+  document.getElementById = id => nodes(root).find(node => node.props.id === id) ?? null
   app.config.warnHandler = message => { throw new Error(message) }
   app.mount(root); await settle()
   let unmounted = false
@@ -146,7 +147,16 @@ async function mount(t, overrides = {}) {
   t.after(async () => { await unmount(); for (const [key, value] of old) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value } })
   const find = predicate => { const found = nodes(root).filter(predicate); assert.equal(found.length, 1, 'Expected one rendered control'); return found[0] }
   const button = label => find(node => node.tag === 'button' && text(node) === label)
-  const click = async label => { button(label).props.onClick(); await settle() }
+  const ariaButton = label => find(node => node.tag === 'button' && node.props['aria-label'] === label)
+  const clickAria = async label => { ariaButton(label).props.onClick(new Event('click')); await settle() }
+  const taskRow = name => find(node => node.props.role === 'row' && nodes(node).some(child => child.tag === 'b' && text(child) === name))
+  const click = async label => { button(label).props.onClick(new Event('click')); await settle() }
+  const keydown = async (label, key) => {
+    const tablist = find(node => node.props.role === 'tablist' && node.props['aria-label'] === label)
+    const event = new Event('keydown', { cancelable: true }); Object.defineProperty(event, 'key', { value: key })
+    for (const handler of [tablist.props.onKeydown].flat()) handler(event)
+    await settle()
+  }
   const field = id => find(node => node.props.id === id)
   const setField = async (id, value, eventName) => {
     const node = field(id); node.props['onUpdate:modelValue'](value)
@@ -156,13 +166,13 @@ async function mount(t, overrides = {}) {
   const component = name => find(node => node.props['data-component'] === name)
   const select = label => find(node => node.tag === 'select' && node.props['aria-label'] === label)
   const changeSelect = async (label, value) => { const node = select(label); node.props['onUpdate:modelValue'](value); await node.props.onChange(); await settle() }
-  const openTask = async () => {
+  const openTask = async (name = state.tasks[0].name) => {
     const back = nodes(root).find(node => node.tag === 'button' && text(node) === '返回任务列表')
     if (back) { back.props.onClick(); await settle() }
-    find(node => node.tag === 'button' && node.props.class === 'sync-task').props.onClick(); await settle()
+    nodes(taskRow(name)).find(node => node.tag === 'button' && node.props.class === 'sync-task').props.onClick(); await settle()
   }
   const advance = async ms => { t.mock.timers.tick(ms); await settle() }
-  return { root, requests, state, find, button, click, field, setField, component, select, changeSelect, openTask, advance, unmount,
+  return { root, requests, state, find, button, ariaButton, click, clickAria, keydown, taskRow, field, setField, component, select, changeSelect, openTask, advance, unmount,
     hold: (path, method) => { const item = { ...deferred(), path, method, used: false }; held.push(item); return item },
     result: data => reply(data), text: () => text(root),
   }
@@ -215,6 +225,71 @@ test('field inspection offers writable text fields and leaves generated fields u
   assert.ok(options.includes('fld-name')); assert.equal(options.includes('sequence'), false); assert.equal(options.includes('formula'), false)
   await h.setField('sync-field-user_id', 'fld-name')
   assert.equal(h.button('保存任务').props.disabled, true)
+})
+
+test('configuration sections preserve selected people and fields without automatic inspection or writes', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-name', '分区中的配置草稿')
+  const editor = h.component('RecipientRangeEditor')
+  const chosen = { ...copy(selection), department_ids: ['department-1'], person_ids: ['person-1'], extra_ids: ['person-2'] }
+  editor.props['onUpdate:modelValue'](chosen); await settle()
+  const requestCount = h.requests.length
+  await h.clickAria('目标多维表')
+  await h.setField('sync-url', 'https://example.feishu.cn/base/another?table=tbl2', 'onInput')
+  await h.setField('sync-field-name', 'target-name')
+  await h.clickAria('定时计划'); await h.setField('sync-cron', '0 9 * * 1-5', 'onInput')
+  await h.clickAria('人员来源')
+  assert.equal(h.component('RecipientRangeEditor'), editor)
+  assert.deepEqual(h.component('RecipientRangeEditor').props.modelValue, chosen)
+  await h.clickAria('目标多维表')
+  assert.equal(h.field('sync-url').value, 'https://example.feishu.cn/base/another?table=tbl2')
+  assert.ok(h.field('sync-field-name').options.some(option => option.value === 'target-name'))
+  await h.clickAria('定时计划')
+  assert.equal(h.field('sync-cron').value, '0 9 * * 1-5')
+  assert.equal(h.field('sync-name').value, '分区中的配置草稿')
+  await h.advance(6000)
+  assert.equal(h.requests.length, requestCount)
+})
+
+test('saving from a configuration section submits the complete source target and schedule together', async t => {
+  const h = await mount(t)
+  await h.click('新建任务'); await h.setField('sync-name', '完整分区配置')
+  const chosen = { ...copy(selection), department_ids: ['department-1'], person_ids: ['person-1'], extra_ids: ['person-2'] }
+  h.component('RecipientRangeEditor').props['onUpdate:modelValue'](chosen); await settle()
+  await h.clickAria('目标多维表')
+  await h.setField('sync-url', taskFixture.target_url, 'onInput'); await h.click('读取目标表')
+  await h.clickAria('定时计划'); await h.setField('sync-cron', '0 9 * * 1-5', 'onInput')
+  await h.clickAria('人员来源')
+  assert.equal(h.button('保存任务').props.disabled, false)
+  await h.find(node => node.tag === 'form').props.onSubmit(new Event('submit')); await settle()
+  const saves = h.requests.filter(request => request.path === '/api/table-sync/tasks' && request.method === 'POST')
+  assert.equal(saves.length, 1)
+  assert.deepEqual(saves[0].body, {
+    name: '完整分区配置', source_kind: 'selection', preset_id: null, selection: chosen,
+    target_url: taskFixture.target_url, table_id: 'tbl1', field_mapping: taskFixture.field_mapping, cron: '0 9 * * 1-5',
+  })
+  assert.equal(h.requests.filter(request => request.path === '/api/table-sync/inspect').length, 1)
+  assert.equal(h.requests.some(request => request.path === '/api/table-sync/cron'), false)
+})
+
+test('configuration section keyboard navigation keeps focus and draft independent of page tabs', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-name', '键盘切换保留草稿')
+  const editor = h.component('RecipientRangeEditor')
+  const chosen = { ...copy(selection), person_ids: ['keyboard-person'] }
+  editor.props['onUpdate:modelValue'](chosen); await settle()
+  const requestCount = h.requests.length
+  for (const [key, expected] of [['ArrowRight', '目标多维表'], ['End', '定时计划'], ['Home', '人员来源'], ['ArrowLeft', '定时计划'], ['ArrowLeft', '目标多维表']]) {
+    await h.keydown('任务配置分区', key)
+    assert.equal(h.ariaButton(expected).props['aria-selected'], true)
+    assert.equal(document.activeElement, h.ariaButton(expected))
+    assert.equal(h.button('同步任务').props['aria-selected'], true)
+    assert.equal(h.button('执行记录').props['aria-selected'], false)
+  }
+  assert.equal(h.field('sync-name').value, '键盘切换保留草稿')
+  assert.equal(h.component('RecipientRangeEditor'), editor)
+  assert.deepEqual(h.component('RecipientRangeEditor').props.modelValue, chosen)
+  assert.equal(h.requests.length, requestCount)
 })
 
 test('turning automatic execution off still permits an independent manual run', async t => {
@@ -361,6 +436,153 @@ test('overview history opens the chosen task records while preserving an unrelat
   await h.click('同步任务'); await h.click('继续编辑')
   assert.equal(h.field('sync-name').value, '新任务未保存草稿')
   assert.equal(h.requests.some(request => request.method === 'POST' || request.method === 'PUT'), false)
+})
+
+test('overview schedule switches update the next run independently of manual execution and cron', async t => {
+  const h = await mount(t)
+  const label = `${taskFixture.name}的定时执行开关`
+  assert.equal(h.ariaButton(label).props.role, 'switch')
+  assert.equal(h.ariaButton(label).props['aria-checked'], false)
+  assert.match(text(h.taskRow(taskFixture.name)), /未开启定时/)
+  await h.clickAria(label)
+  assert.equal(h.ariaButton(label).props['aria-checked'], true)
+  assert.match(text(h.taskRow(taskFixture.name)), /2026\/11\/19 04:00:00/)
+  await h.clickAria(label)
+  assert.equal(h.ariaButton(label).props['aria-checked'], false)
+  assert.match(text(h.taskRow(taskFixture.name)), /未开启定时/)
+  assert.equal(h.ariaButton(`执行一次：${taskFixture.name}`).props.disabled, false)
+  assert.equal(h.state.tasks[0].cron, '0 4 * * *')
+  assert.equal(h.state.tasks[0].next_run_at, null)
+  assert.deepEqual(h.requests.filter(request => request.path.endsWith('/enabled')).map(request => request.body), [{ enabled: true }, { enabled: false }])
+  assert.equal(h.button('同步任务').props['aria-selected'], true)
+  assert.equal(h.requests.some(request => request.path === '/api/table-sync/runs'), false)
+})
+
+test('scheduled rows refresh when due, throttle a stalled schedule and pause while hidden', async t => {
+  const now = 1_795_000_000_000, due = new Date(now + 6000).toISOString()
+  const h = await mount(t, { tasks: [{ ...copy(taskFixture), enabled: true, next_run_at: due }] })
+  const taskReads = () => h.requests.filter(request => request.path === '/api/table-sync/tasks' && request.method === 'GET').length
+  const initialReads = taskReads()
+  await h.advance(3000)
+  assert.equal(taskReads(), initialReads)
+  const next = new Date(now + 120_000).toISOString()
+  Object.assign(h.state.tasks[0], { next_run_at: next, last_status: 'success', last_run_at: due, active_run_id: null })
+  await h.advance(3000)
+  assert.equal(taskReads(), initialReads + 1)
+  assert.ok(nodes(h.taskRow(taskFixture.name)).some(node => node.tag === 'time' && node.props.datetime === next))
+  assert.match(text(h.taskRow(taskFixture.name)), /已完成/)
+  assert.equal(h.ariaButton(`执行一次：${taskFixture.name}`).props.disabled, false)
+  assert.equal(h.button('同步任务').props['aria-selected'], true)
+  assert.equal(h.requests.some(request => request.path === '/api/table-sync/runs'), false)
+
+  h.state.tasks[0].next_run_at = due
+  await h.click('刷新')
+  const stalledReads = taskReads()
+  await h.advance(27000)
+  assert.equal(taskReads(), stalledReads)
+  document.hidden = true
+  await h.advance(3000)
+  assert.equal(taskReads(), stalledReads)
+  document.hidden = false; document.dispatchEvent(new Event('visibilitychange')); await settle()
+  assert.equal(taskReads(), stalledReads + 1)
+  await h.advance(27000)
+  assert.equal(taskReads(), stalledReads + 1)
+  h.state.tasks[0].next_run_at = next
+  await h.advance(3000)
+  assert.equal(taskReads(), stalledReads + 2)
+  assert.ok(nodes(h.taskRow(taskFixture.name)).some(node => node.tag === 'time' && node.props.datetime === next))
+})
+
+test('overview execution stays on the list and deduplicates submitting and active runs', async t => {
+  const h = await mount(t)
+  const label = `执行一次：${taskFixture.name}`
+  const pending = h.hold('/api/table-sync/tasks/task-1/run', 'POST')
+  const action = h.ariaButton(label)
+  action.props.onClick(); action.props.onClick(); await settle()
+  assert.equal(pending.used, true)
+  assert.equal(h.ariaButton(label).props.disabled, true)
+  assert.equal(text(h.ariaButton(label)), '正在提交…')
+  const run = { id: 'run-queued', task_id: 'task-1', task_name: taskFixture.name, kind: 'sync', trigger: 'manual', status: 'queued', actor_name: '管理员', created_at: '2026-11-17T00:00:00Z', started_at: null, finished_at: null, summary: null, error: null }
+  h.state.tasks[0].active_run_id = run.id; h.state.runs.push(run)
+  pending.resolve(h.result(copy(run))); await settle()
+  assert.equal(h.ariaButton(label).props.disabled, true)
+  h.ariaButton(label).props.onClick(); await settle()
+  assert.equal(h.requests.filter(request => request.path.endsWith('/run')).length, 1)
+  assert.equal(h.button('同步任务').props['aria-selected'], true)
+  assert.equal(h.requests.some(request => request.path === '/api/table-sync/runs'), false)
+  assert.equal(h.state.tasks[0].enabled, false)
+  assert.equal(h.state.tasks[0].cron, '0 4 * * *')
+})
+
+test('row actions on another task preserve the current unsaved editor configuration', async t => {
+  const second = { ...copy(taskFixture), id: 'task-2', name: '客服名单同步', table_id: 'tbl2' }
+  const h = await mount(t, { tasks: [copy(taskFixture), second] })
+  await h.openTask(); await h.setField('sync-name', '正在编辑但尚未保存')
+  await h.setField('sync-cron', '0 9 * * *'); await h.click('返回任务列表')
+  await h.clickAria(`${second.name}的定时执行开关`)
+  await h.clickAria(`执行一次：${second.name}`)
+  assert.equal(h.button('同步任务').props['aria-selected'], true)
+  assert.deepEqual(h.requests.filter(request => request.method === 'POST' && request.path.endsWith('/run')).map(request => request.path), ['/api/table-sync/tasks/task-2/run'])
+  await h.click('继续编辑')
+  assert.equal(h.field('sync-name').value, '正在编辑但尚未保存')
+  assert.equal(h.field('sync-cron').value, '0 9 * * *')
+  assert.equal(h.button('手动执行一次').props.disabled, true)
+  assert.equal(h.state.tasks[0].enabled, false)
+  assert.equal(h.state.tasks[0].active_run_id, null)
+})
+
+test('overview execution cannot bypass dirty or stale configuration checks for the edited task', async t => {
+  const h = await mount(t)
+  const label = `执行一次：${taskFixture.name}`
+  await h.openTask(); await h.setField('sync-cron', '0 9 * * *'); await h.click('返回任务列表')
+  assert.equal(h.ariaButton(label).props.disabled, true)
+  assert.match(h.text(), /先保存/)
+  h.ariaButton(label).props.onClick(); await settle()
+  assert.equal(h.requests.some(request => request.path.endsWith('/run')), false)
+  await h.openTask(); await h.click('放弃修改并继续')
+  h.state.tasks[0].config_version = 2
+  await h.click('刷新'); await h.click('返回任务列表')
+  assert.equal(h.ariaButton(label).props.disabled, true)
+  h.ariaButton(label).props.onClick(); await settle()
+  assert.equal(h.requests.some(request => request.path.endsWith('/run')), false)
+})
+
+test('failed row operations preserve server state and display the error on the affected task', async t => {
+  const h = await mount(t)
+  const switchLabel = `${taskFixture.name}的定时执行开关`, runLabel = `执行一次：${taskFixture.name}`
+  const toggle = h.hold('/api/table-sync/tasks/task-1/enabled', 'PATCH')
+  await h.clickAria(switchLabel)
+  toggle.resolve({ ok: false, status: 500, json: async () => ({ detail: '保存定时状态失败' }) }); await settle()
+  assert.equal(h.ariaButton(switchLabel).props['aria-checked'], false)
+  assert.match(text(h.taskRow(taskFixture.name)), /保存定时状态失败/)
+  assert.match(text(h.taskRow(taskFixture.name)), /未开启定时/)
+  const execution = h.hold('/api/table-sync/tasks/task-1/run', 'POST')
+  await h.clickAria(runLabel)
+  execution.resolve({ ok: false, status: 500, json: async () => ({ detail: '提交执行失败' }) }); await settle()
+  assert.equal(h.ariaButton(runLabel).props.disabled, false)
+  assert.match(text(h.taskRow(taskFixture.name)), /提交执行失败/)
+  assert.equal(h.state.tasks[0].enabled, false)
+  assert.equal(h.state.tasks[0].active_run_id, null)
+  assert.equal(h.button('同步任务').props['aria-selected'], true)
+})
+
+test('late polling cannot undo a successful row schedule change or execution', async t => {
+  const other = { ...copy(taskFixture), id: 'task-2', name: '其他执行中的任务', active_run_id: 'external-run' }
+  const h = await mount(t, { tasks: [copy(taskFixture), other] })
+  const staleBeforeToggle = copy(h.state.tasks)
+  const togglePoll = h.hold('/api/table-sync/tasks', 'GET')
+  await h.advance(3000); await h.clickAria(`${taskFixture.name}的定时执行开关`)
+  assert.equal(togglePoll.request.signal.aborted, true)
+  togglePoll.resolve(h.result({ items: staleBeforeToggle, total: 2, page: 1 })); await settle()
+  assert.equal(h.ariaButton(`${taskFixture.name}的定时执行开关`).props['aria-checked'], true)
+  const staleBeforeRun = copy(h.state.tasks)
+  const runPoll = h.hold('/api/table-sync/tasks', 'GET')
+  await h.advance(3000); await h.clickAria(`执行一次：${taskFixture.name}`)
+  assert.equal(runPoll.request.signal.aborted, true)
+  runPoll.resolve(h.result({ items: staleBeforeRun, total: 2, page: 1 })); await settle()
+  assert.equal(h.ariaButton(`执行一次：${taskFixture.name}`).props.disabled, true)
+  assert.equal(h.ariaButton(`${taskFixture.name}的定时执行开关`).props['aria-checked'], true)
+  assert.equal(h.requests.filter(request => request.path.endsWith('/run')).length, 1)
 })
 
 test('a preset task with no inline selection can switch to a fresh task-only selection', async t => {
