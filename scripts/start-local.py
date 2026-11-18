@@ -219,6 +219,7 @@ def main():
         services = [
             ("API", [python, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(args.api_port), "--no-access-log"], ROOT / "backend"),
             ("worker", [python, "-m", "app.worker"], ROOT / "backend"),
+            ("table-sync", [python, "-m", "app.table_sync.worker"], ROOT / "backend"),
             ("前端", [node, "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", str(port), "--strictPort"], ROOT / "frontend"),
         ]
         supervise(services, env, f"http://127.0.0.1:{port}/api/health",

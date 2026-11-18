@@ -7,8 +7,8 @@ from collections import defaultdict
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from ..directory import in_selection_path, resolve_selection
-from ..models import Department, Employee, Membership, Preset, SystemState
+from ..directory import resolve_selection
+from ..models import Department, Employee, Preset, SystemState
 from ..schemas import Selection
 
 
@@ -53,31 +53,9 @@ def _validate_selection(db, selection):
     explicit = set(selection.extra_ids)
     if selection.match_mode == "union" or selection.mode == "selected":
         explicit.update(selection.person_ids)
-    explicit_people = dict(db.execute(select(Employee.id, Employee.status)
-                                     .where(Employee.id.in_(explicit))).all()) if explicit else {}
-    if explicit - explicit_people.keys():
+    explicit_people = set(db.scalars(select(Employee.id).where(Employee.id.in_(explicit)))) if explicit else set()
+    if explicit - explicit_people:
         raise SourceError("名单包含已不存在的指定人员，请先修正名单")
-    if any(status == "unknown" for status in explicit_people.values()):
-        raise SourceError("名单中有人员状态待核实，请等待通讯录同步完成")
-
-    # Contact events temporarily mark users unknown. Do not interpret that as
-    # a departure and remove their remote row while directory refresh is pending.
-    if selection.match_mode == "union":
-        has_department_range = bool(selection.department_ids)
-    else:
-        has_department_range = selection.mode == "all" and any(selection.levels)
-    if has_department_range:
-        unknown_paths = db.execute(select(Employee.id, Department.path_ids)
-                                  .join(Membership, Membership.employee_id == Employee.id)
-                                  .join(Department, Department.id == Membership.department_id)
-                                  .where(Employee.status == "unknown", Department.active.is_(True)))
-        for _, path_ids in unknown_paths:
-            if selection.match_mode == "union":
-                relevant = bool(set(selection.department_ids).intersection(path_ids))
-            else:
-                relevant = in_selection_path({"paths": [{"ids": path_ids}]}, selection.levels)
-            if relevant:
-                raise SourceError("所选部门有人员状态待核实，请等待通讯录同步完成")
 
 
 def read_source(db, config):
@@ -88,6 +66,8 @@ def read_source(db, config):
         raise SourceError("通讯录尚未完成首次同步，不能执行名单同步")
     selection, source_name = _selection(db, config)
     _validate_selection(db, selection)
+    # Reuse the current roster: only active employees participate. Unknown and
+    # other unavailable employees remain stored for historical references.
     resolved = resolve_selection(db, selection)
     if any(warning.startswith("人员已不符合部门范围：") for warning in resolved["warnings"]):
         raise SourceError("指定人员已不符合名单的部门范围，请先修正名单")

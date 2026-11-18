@@ -17,7 +17,7 @@ FEISHU_REDIRECT_URI=http://localhost:5174/api/auth/callback
 py -3.13 scripts\start-local.py
 ```
 
-脚本会安装缺少的依赖并启动前端、API 和 worker；按 `Ctrl+C` 停止。
+脚本会安装缺少的依赖并启动前端、API、通知 worker 和独立的名单同步 worker；按 `Ctrl+C` 停止全部服务。
 
 ## 服务器部署与更新
 

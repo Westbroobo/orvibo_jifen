@@ -7,10 +7,11 @@ from sqlalchemy import event, select
 
 from app.db import now_utc
 from app.feishu import FeishuError
-from app.models import Employee, Preset, SystemState, TableSyncLog, TableSyncRun, TableSyncTask
+from app.models import Balance, Batch, Employee, Ledger, Membership, Preset, SystemState, TableSyncLog, TableSyncRun, TableSyncTask
 from app.table_sync import api, service
 from app.table_sync.schedule import next_times, validate_cron
 from test_api import client, login
+from test_adjustments import request, submit
 
 
 MAPPING = {"department": "fldDept", "name": "fldName", "user_id": "fldUser"}
@@ -214,6 +215,38 @@ def test_unknown_create_stops_delete_and_next_run_repairs(client, prepared, sett
     service.execute_run(prepared, claim["run_id"], claim["lease_token"], settings, remote)
     assert result(prepared, claim)[0] == "success" and remote.calls == ["create", "delete"]
     assert [row["user_id"] for row in remote.rows] == ["u_a"]
+
+
+def test_unknown_people_leave_remote_roster_but_keep_employee_and_score_history(client, prepared, settings, when):
+    batch_id = submit(prepared, settings, when, request())
+    with prepared.begin() as db:
+        db.get(Employee, "a").status = "unknown"
+    create(client, prepared, selection={"match_mode": "union", "department_ids": ["rd"], "person_ids": ["a"]})
+    original = [{"record_id": "recA", "user_id": "u_a", "name": "张三", "department": "平台"},
+                {"record_id": "recC", "user_id": "u_c", "name": "多部门员工", "department": "华东；平台"}]
+    remote = MemoryTable(prepared, original)
+    preview = start(prepared, kind="preview")
+    service.execute_run(prepared, preview["run_id"], preview["lease_token"], settings, remote)
+    status, error, summary = result(prepared, preview)
+    assert status == "success" and error is None
+    assert summary["source"] == 1 and summary["delete"] == 1 and not remote.calls
+    assert remote.rows == original
+    rows = client.get(f"/api/table-sync/runs/{preview['run_id']}/rows?action=delete").json()["items"]
+    assert len(rows) == 1 and rows[0]["user_id"] == "u_a" and rows[0]["reason"] == "not_in_source"
+
+    claim = start(prepared)
+    service.execute_run(prepared, claim["run_id"], claim["lease_token"], settings, remote)
+    assert result(prepared, claim)[0] == "success" and remote.calls == ["delete"]
+    assert remote.rows == [original[1]]
+    with prepared() as db:
+        assert db.get(Employee, "a").status == "unknown"
+        assert db.get(Membership, ("a", "team")) is not None
+        ledger = db.scalar(select(Ledger).where(Ledger.batch_id == batch_id))
+        assert ledger.employee_id == "a" and ledger.final_total == 65
+        assert db.get(Balance, ("a", "2026-10")).total == 65
+        assert db.get(Batch, batch_id).snapshot["rows"][0]["person"]["name"] == "张三"
+    history = client.get("/api/score-ledgers?month=2026-10").json()
+    assert history["total"] == 1 and history["items"][0]["person_name"] == "张三"
 
 
 def test_source_change_during_write_prevents_cleanup(client, prepared, settings):

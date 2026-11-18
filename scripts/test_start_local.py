@@ -154,6 +154,7 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(check_ports.call_args.args[0], [port, 8000])
                 run_step.assert_not_called()
                 services, env, health_url, message = supervise.call_args.args
+                self.assertIn(("table-sync", [sys.executable, "-m", "app.table_sync.worker"], self.root / "backend"), services)
                 frontend = next(command for name, command, _ in services if name == "前端")
                 self.assertEqual(frontend[frontend.index("--port") + 1], str(port))
                 self.assertEqual(env["PUBLIC_URL"], url)

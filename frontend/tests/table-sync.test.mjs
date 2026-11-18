@@ -156,7 +156,11 @@ async function mount(t, overrides = {}) {
   const component = name => find(node => node.props['data-component'] === name)
   const select = label => find(node => node.tag === 'select' && node.props['aria-label'] === label)
   const changeSelect = async (label, value) => { const node = select(label); node.props['onUpdate:modelValue'](value); await node.props.onChange(); await settle() }
-  const openTask = async () => { find(node => node.tag === 'button' && node.props.class?.includes('sync-task') && !node.props.class?.includes('sync-task-title')).props.onClick(); await settle() }
+  const openTask = async () => {
+    const back = nodes(root).find(node => node.tag === 'button' && text(node) === '返回任务列表')
+    if (back) { back.props.onClick(); await settle() }
+    find(node => node.tag === 'button' && node.props.class === 'sync-task').props.onClick(); await settle()
+  }
   const advance = async ms => { t.mock.timers.tick(ms); await settle() }
   return { root, requests, state, find, button, click, field, setField, component, select, changeSelect, openTask, advance, unmount,
     hold: (path, method) => { const item = { ...deferred(), path, method, used: false }; held.push(item); return item },
@@ -221,7 +225,7 @@ test('turning automatic execution off still permits an independent manual run', 
   assert.equal(h.state.tasks[0].enabled, false); assert.equal(h.state.tasks[0].cron, '0 4 * * *')
   assert.deepEqual(h.requests.filter(request => request.path.endsWith('/enabled')).map(request => request.body), [{ enabled: true }, { enabled: false }])
   assert.equal(h.requests.filter(request => request.path.endsWith('/run')).length, 1)
-  await h.click('任务设置')
+  await h.click('同步任务')
   assert.equal(h.find(node => node.tag === 'fieldset').props.disabled, false)
   assert.match(h.text(), /已有任务排队或执行中/)
 })
@@ -234,6 +238,7 @@ test('preview is queued only on click and supports a valid empty source with del
   h.state.tasks[0].active_run_id = null
   await h.click('刷新详情'); await h.advance(3000)
   assert.match(h.text(), /当前名单为 0 人；执行同步将删除目标表中 72 条记录/)
+  await h.click('同步任务')
   assert.equal(h.button('手动执行一次').props.disabled, false)
   assert.equal(h.requests.filter(request => request.path.endsWith('/preview')).length, 1)
 })
@@ -290,7 +295,7 @@ test('all execution records remain accessible after a task was removed', async t
   const h = await mount(t)
   await h.openTask(); await h.click('手动执行一次')
   h.state.tasks = []; h.state.runs[0].status = 'success'
-  await h.click('全部执行记录')
+  await h.click('全部任务')
   const query = h.requests.filter(request => request.path === '/api/table-sync/runs').at(-1).query
   assert.equal(query.has('task_id'), false)
   assert.match(h.text(), /全部执行记录/); assert.match(h.text(), /手动执行/)
@@ -303,6 +308,59 @@ test('background task refresh preserves unsaved form edits', async t => {
   await h.advance(3000)
   assert.equal(h.field('sync-name').value, '正在编辑的任务名称')
   assert.match(h.text(), /配置有改动，请先保存/)
+})
+
+test('switching page tabs preserves an unsaved task and keeps global history independent', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-name', '尚未保存的任务配置')
+  assert.equal(h.requests.some(request => request.path === '/api/table-sync/runs'), false)
+  await h.click('执行记录')
+  assert.equal(h.button('执行记录').props['aria-selected'], true)
+  assert.equal(h.requests.filter(request => request.path === '/api/table-sync/runs').at(-1).query.has('task_id'), false)
+  await h.click('同步任务')
+  assert.equal(h.field('sync-name').value, '尚未保存的任务配置')
+  assert.equal(h.button('手动执行一次').props.disabled, true)
+  await h.click('新建任务'); await h.click('放弃修改并继续'); await h.setField('sync-name', '新任务草稿')
+  await h.click('执行记录'); await h.click('同步任务')
+  assert.equal(h.field('sync-name').value, '新任务草稿')
+})
+
+test('task history can expand to all tasks without discarding the current configuration', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-cron', '0 9 * * *')
+  await h.click('查看执行记录')
+  assert.equal(h.requests.filter(request => request.path === '/api/table-sync/runs').at(-1).query.get('task_id'), 'task-1')
+  await h.click('全部任务')
+  assert.equal(h.requests.filter(request => request.path === '/api/table-sync/runs').at(-1).query.has('task_id'), false)
+  await h.click('同步任务')
+  assert.equal(h.field('sync-cron').value, '0 9 * * *')
+})
+
+test('returning to the overview keeps a draft and replacing it requires an explicit choice', async t => {
+  const h = await mount(t)
+  await h.openTask(); await h.setField('sync-name', '保留中的任务草稿')
+  await h.click('返回任务列表')
+  assert.match(h.text(), /未保存的配置：保留中的任务草稿/)
+  await h.click('继续编辑')
+  assert.equal(h.field('sync-name').value, '保留中的任务草稿')
+  await h.click('新建任务'); await h.click('继续编辑')
+  assert.equal(h.field('sync-name').value, '保留中的任务草稿')
+  assert.equal(h.requests.some(request => request.method === 'POST' || request.method === 'PUT'), false)
+  await h.click('新建任务'); await h.click('放弃修改并继续')
+  assert.equal(h.field('sync-name').value, '')
+  assert.equal(h.text().includes('查看执行记录'), false)
+  assert.equal(h.requests.some(request => request.method === 'POST' || request.method === 'PUT'), false)
+})
+
+test('overview history opens the chosen task records while preserving an unrelated draft', async t => {
+  const h = await mount(t)
+  await h.click('新建任务'); await h.setField('sync-name', '新任务未保存草稿')
+  await h.click('返回任务列表'); await h.click('查看记录')
+  assert.equal(h.requests.filter(request => request.path === '/api/table-sync/runs').at(-1).query.get('task_id'), 'task-1')
+  assert.equal(h.button('执行记录').props['aria-selected'], true)
+  await h.click('同步任务'); await h.click('继续编辑')
+  assert.equal(h.field('sync-name').value, '新任务未保存草稿')
+  assert.equal(h.requests.some(request => request.method === 'POST' || request.method === 'PUT'), false)
 })
 
 test('a preset task with no inline selection can switch to a fresh task-only selection', async t => {
@@ -323,7 +381,7 @@ test('a newer server config does not silently replace the editor version', async
   assert.equal(h.button('保存任务').props.disabled, true)
   assert.equal(h.button('手动执行一次').props.disabled, true)
   assert.match(h.text(), /任务配置已被其他管理员更新/)
-  await h.openTask()
+  await h.openTask(); await h.click('放弃修改并继续')
   assert.equal(h.field('sync-name').value, '其他管理员已修改')
   assert.equal(h.button('手动执行一次').props.disabled, false)
 })
@@ -356,9 +414,10 @@ test('changing a saved target clears the previously displayed preview detail', a
   await h.openTask(); await h.click('预览同步差异')
   h.state.runs[0].status = 'success'; h.state.runs[0].summary = { ...emptySummary, target: 72, delete: 72 }
   h.state.tasks[0].active_run_id = null
-  await h.click('刷新详情'); await h.click('任务设置')
+  await h.click('刷新详情'); await h.click('同步任务')
   await h.setField('sync-url', 'https://example.feishu.cn/base/another?table=tbl2', 'onInput')
   await h.click('执行记录')
   assert.equal(h.text().includes('当前名单为 0 人；执行同步将删除目标表中 72 条记录'), false)
+  await h.click('同步任务')
   assert.equal(h.button('手动执行一次').props.disabled, true)
 })

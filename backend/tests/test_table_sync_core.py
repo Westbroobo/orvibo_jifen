@@ -120,15 +120,39 @@ def test_source_missing_id_or_uninitialized_directory_never_looks_like_empty(fac
             read_source(db, config)
 
 
-def test_source_related_unknown_blocks_but_resigned_people_are_excluded(factory, when):
+@pytest.mark.parametrize("config", [
+    source_config(department_ids=["rd"]),
+    source_config(person_ids=["a", "c", "gone"]),
+    source_config(extra_ids=["a", "c", "gone"]),
+    {"source_kind": "selection", "selection": {"levels": [["rd"], [], []], "mode": "all"}},
+    {"source_kind": "selection", "selection": {"levels": [["rd"], [], []],
+                                                "mode": "selected", "person_ids": ["a", "c"]}},
+    {"source_kind": "preset", "preset_id": "public"},
+])
+def test_source_excludes_unknown_without_blocking_active_roster(factory, when, config):
     initialize_directory(factory, when)
     with factory.begin() as db:
         db.get(Employee, "a").status = "unknown"
+        db.add(Preset(id="public", owner_id="admin", scope="public", name="公开名单",
+                      selection={"match_mode": "union", "department_ids": ["rd"], "person_ids": ["a"]}))
     with factory() as db:
-        with pytest.raises(SourceError, match="待核实"):
-            read_source(db, source_config(department_ids=["rd"]))
+        assert read_source(db, config)["rows"] == [person("staffc", "多部门员工", "华东；平台")]
         result = read_source(db, source_config(person_ids=["b", "gone"]))
         assert result["rows"] == [person("staffb", "李四", "华东")]
+        assert db.get(Employee, "a").status == "unknown"
+
+
+def test_unknown_only_roster_is_empty_and_status_changes_invalidate_snapshot(factory, when):
+    initialize_directory(factory, when)
+    config = source_config(person_ids=["a"])
+    with factory() as db:
+        previous = read_source(db, config)
+    with factory.begin() as db:
+        db.get(Employee, "a").status = "unknown"
+    with factory() as db:
+        assert read_source(db, config)["rows"] == []
+        with pytest.raises(SourceError, match="发生变化"):
+            check_source(db, previous, config)
 
 
 @pytest.mark.parametrize("config", [source_config(department_ids=["missing"]),
